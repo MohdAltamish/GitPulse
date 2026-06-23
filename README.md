@@ -122,6 +122,10 @@ npm run analyze -- --file <path> [options]
 | `--project-id <id>` | `--project`, `-p` | GitLab project ID (or set `GITLAB_PROJECT_ID`) |
 | `--format <text\|json>` | | Output format (default: `text`) |
 | `--json` | | Shorthand for `--format json` |
+| `--require-orbit` | | Exit non-zero unless `data_source === "orbit-remote"` (proves real graph) |
+| `--fail-on <LOW\|MEDIUM\|HIGH>` | | Exit non-zero when risk is at/above this level (CI gate) |
+| `--strict` | | Exit non-zero when `safe_to_merge` is `false` |
+| `--comment` | | Post (or update) the report as a note on the current MR (CI) |
 | `--help` | `-h` | Show help |
 
 A bare positional argument is treated as the file path, so `node cli.js orbit.js -p 83678311` also works.
@@ -141,23 +145,28 @@ node cli.js --file orbit.js --format json --project-id 83678311
 
 ### Example Output (real Orbit data)
 
+Verbatim from the CI `orbit-proof` job against this project (`data_source: orbit-remote`):
+
 ```
-📊 Blast Radius Report — orbit.js
+📊 Blast Radius Report — report.js
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔴 Risk: HIGH (score: 100/100)
-   3 dependents across 1 team. 3 open MRs touch related code.
+Data source: orbit-remote (real graph: yes)
+🔴 Risk: HIGH (score: 87/100)
+   3 dependents across 2 teams. 1 open MR touches related code.
 
 📁 Direct Dependents (files that import this)
-   ├── gitlab.js
-   └── agent.js
+   ├── agent.js                                   (Team: team-unknown)
+   └── tests/report.test.js                       (Team: team-reports)
 
 🔗 Transitive Dependents (files that depend on those)
    └── cli.js (depth: 2, via: agent.js)
 
+👥 Teams to Notify
+   ├── #team-unknown             (2 files affected)
+   └── #team-reports             (1 file affected)
+
 🔀 Open MRs Touching Related Code
-   ├── !4 — "feat: maximize hackathon submission"
-   ├── !7 — "feat: add orbit_get_graph_status tool"
-   └── !9 — "fix: prevent risk-score drift"
+   └── !11 — "feat: Orbit proof, enforcing risk gate, ..." by @unknown
 
 ✅ Suggested Reviewers
    └── @altamish6589 (owners of affected files)
