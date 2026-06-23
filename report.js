@@ -162,8 +162,14 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
   }
   const suggestedReviewers = Array.from(reviewerSet);
 
-  // Safe to merge? (AGENTS.md guardrail: never true if overlapping open MRs)
-  const safeToMerge = openMRs.length === 0 && score.level !== "HIGH";
+  // Data provenance: 'orbit-remote' = real graph, anything else = mock fallback.
+  const dataSource = (graph.metadata && graph.metadata.source) || "unknown";
+  const isRealData = dataSource === "orbit-remote";
+
+  // Safe to merge? (AGENTS.md guardrail: never true if overlapping open MRs).
+  // Never certify a merge from mock/unknown data either.
+  const safeToMerge =
+    isRealData && openMRs.length === 0 && score.level !== "HIGH";
 
   const totalDependents = directDeps.length + transitiveDeps.length;
   const teamCount = teamsAffected.filter((t) => t.name !== "unknown").length;
@@ -188,6 +194,8 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
     suggested_reviewers: suggestedReviewers,
     safe_to_merge: safeToMerge,
     score_breakdown: score.breakdown,
+    data_source: dataSource,
+    is_real_data: isRealData,
   };
 }
 
@@ -210,6 +218,12 @@ export function formatReportForCLI(report) {
   lines.push("");
   lines.push(`📊 Blast Radius Report — ${targetLabel}`);
   lines.push("━".repeat(60));
+  if (!report.is_real_data) {
+    lines.push(
+      `⚠️  MOCK DATA (source: ${report.data_source}). Orbit was unavailable — this report is DEMO data, not a real blast-radius trace. Do not use it for merge decisions.`
+    );
+    lines.push("━".repeat(60));
+  }
   lines.push(
     `${riskEmoji[risk] || "⚪"} Risk: ${risk}  (score: ${risk_score}/100)`
   );
