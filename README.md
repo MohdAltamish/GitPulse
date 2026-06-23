@@ -65,18 +65,23 @@ cli.js  ──→  agent.js (optional Claude loop, model: claude-sonnet-4-6)
                  │
                  ├── orbit.js          → dependency traversal + ownership
                  │     ├── orbit-client.js → Orbit REST client (POST /api/v4/orbit/query)
+                 │     │     └── gitlab-api.js → shared base-URL + auth headers
                  │     └── static-analysis.js → real import-graph fallback (no Orbit)
                  ├── gitlab.js         → open MRs + pipelines via Orbit
-                 └── report.js         → deterministic scoring + report builder
+                 ├── report.js         → deterministic scoring + report builder
+                 └── mr-comment.js     → idempotent MR-note posting (--comment)
+                       └── gitlab-api.js → shared base-URL + auth headers
 ```
 
-- **`cli.js`** parses arguments, invokes the agent, and prints text or JSON output. It runs with or without an API key.
+- **`cli.js`** parses arguments, invokes the agent, prints text or JSON output, posts the optional MR comment, and applies the enforcing exit-code gates (`--require-orbit`, `--fail-on`, `--strict`). It runs with or without an API key.
 - **`agent.js`** runs the Claude loop with four tool definitions when a key is present, or executes the tools deterministically when it is not, then calls `report.js` so scoring never depends on what the model "decides" the risk is.
 - **`orbit.js`** implements `orbitQueryDependents` and `orbitGetOwners`, with a real static-analysis fallback ahead of mock.
 - **`gitlab.js`** implements `gitlabGetOpenMRs` and `gitlabGetPipelines`.
 - **`orbit-client.js`** queries the Orbit REST API directly (no external binary required); `glab orbit remote query` is a secondary fallback for local dev.
+- **`gitlab-api.js`** centralizes `apiBaseUrl()` and `authHeaders()` so the Orbit client and the MR-comment integration share one auth/transport definition.
 - **`static-analysis.js`** parses real `import`/`export ... from` statements across the repo to build a true reverse-dependency graph when Orbit is unavailable.
 - **`report.js`** holds `calculateRiskScore`, `buildReport`, and `formatReportForCLI`.
+- **`mr-comment.js`** renders the report as markdown and posts (or updates in place) a GitPulse note on the MR via a hidden marker.
 
 ---
 
