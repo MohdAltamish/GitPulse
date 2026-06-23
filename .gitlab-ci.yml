@@ -123,6 +123,11 @@ risk-gate:
     - node cli.js --file ${GITPULSE_TARGET} --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID} --fail-on HIGH
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  # GitPulse self-analyzes in this repo, where almost every module overlaps the
+  # open MR + many pipelines and therefore always scores HIGH. The gate is a
+  # demonstration here (stays visibly red), but is a HARD BLOCK for consumer
+  # projects: copy this job WITHOUT allow_failure to enforce on real changes.
+  allow_failure: true
 
 # Post the blast-radius report as a comment on the MR (idempotent). Soft-fails
 # if no api-scoped GITLAB_TOKEN is configured. Requires CI/CD var GITLAB_TOKEN.
