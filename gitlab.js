@@ -93,10 +93,16 @@ async function queryOrbitOpenMRs(files, projectId) {
           entity: "MergeRequestDiffFile",
           filters: { old_path: { op: "ends_with", value: file } },
         },
+        {
+          id: "author",
+          entity: "User",
+          columns: ["username", "name"],
+        },
       ],
       relationships: [
         { type: "HAS_DIFF", from: "mr", to: "diff" },
         { type: "HAS_FILE", from: "diff", to: "f" },
+        { type: "AUTHORED", from: "author", to: "mr" },
       ],
       limit: 20,
     };
@@ -111,7 +117,9 @@ async function queryOrbitOpenMRs(files, projectId) {
         allMRs.set(iid, {
           id: iid,
           title: row.title || row.mr_title || `MR !${iid}`,
-          author: row.author || "@unknown",
+          author: row.username || row.author_username
+            ? `@${row.username || row.author_username}`
+            : "@unknown",
           url: row.web_url || row.mr_web_url || `https://gitlab.com/project/${projectId}/-/merge_requests/${iid}`,
           state: "opened",
           source_branch: row.source_branch || row.mr_source_branch,
