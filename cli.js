@@ -147,27 +147,15 @@ async function main() {
   console.log("╚══════════════════════════════════════════════════════════════╝");
 
   try {
-    const { report } = await runBlastRadiusAgent(
+    const { report, reportObject } = await runBlastRadiusAgent(
       args.file,
       args.function,
       args.projectId
     );
 
     if (args.format === "json") {
-      // Try to extract JSON from the report text
-      const jsonMatch = report.match(/```json\n([\s\S]*?)\n```/);
-      if (jsonMatch) {
-        // Pretty-print extracted JSON
-        try {
-          const parsed = JSON.parse(jsonMatch[1]);
-          console.log(JSON.stringify(parsed, null, 2));
-        } catch {
-          console.log(jsonMatch[1]);
-        }
-      } else {
-        // If no JSON block found, output the raw report
-        console.log(report);
-      }
+      // Serialize the structured report object directly.
+      console.log(JSON.stringify(reportObject, null, 2));
     } else {
       console.log(report);
     }
