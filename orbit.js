@@ -66,6 +66,7 @@ export async function orbitGetOwners(files) {
     owner: inferOwnerFromPath(file),
     last_committer: inferOwnerFromPath(file),
     codeowners_match: `*/${file.split("/")[1]}/**`,
+    ownership_basis: "inferred-from-path",
   }));
 }
 
@@ -218,8 +219,9 @@ async function queryOrbitOwners(files) {
         team: inferTeamFromPath(file),
         owner: `@${username}`,
         last_committer: `@${username}`,
-        codeowners_match: `*/${file.split("/")[1]}/**`,
+        codeowners_match: null,
         source: "orbit-remote",
+        ownership_basis: "mr-authorship",
       });
     } else {
       // No MR history found — mark ownership as unknown (AGENTS.md guardrail)
@@ -231,6 +233,7 @@ async function queryOrbitOwners(files) {
         codeowners_match: null,
         source: "orbit-remote",
         ownership: "unknown",
+        ownership_basis: "unknown",
       });
     }
   }
