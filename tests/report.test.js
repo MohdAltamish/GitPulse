@@ -25,6 +25,9 @@ function graphWith(directFiles, transitiveFiles = []) {
       via: directFiles[0],
       depth: 2,
     })),
+    // Fixtures represent REAL graph data. buildReport refuses to mark a report
+    // safe_to_merge unless the data source is real (orbit-remote/static-analysis).
+    metadata: { source: "orbit-remote" },
   };
 }
 

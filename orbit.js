@@ -9,6 +9,7 @@
  */
 
 import { queryOrbit } from "./orbit-client.js";
+import { staticAnalyzeDependents } from "./static-analysis.js";
 
 /**
  * Query Orbit for all files that depend on the target file/symbol.
@@ -35,8 +36,18 @@ export async function orbitQueryDependents(file, symbol = null, depth = 3) {
     return orbitResult;
   }
 
-  // Fallback to mock data
-  console.log(`    [Orbit] Using mock dependency data (fallback)`);
+  // Fallback 1: real static import analysis of the repo on disk. This yields a
+  // genuinely correct graph even when Orbit is unavailable.
+  const staticResult = await staticAnalyzeDependents(file, symbol, depth);
+  if (staticResult) {
+    console.log(
+      `    [Orbit] ⚠️ Orbit unavailable — using real static import analysis (${staticResult.metadata.scanned_files} files scanned)`
+    );
+    return staticResult;
+  }
+
+  // Fallback 2: labelled mock data (last resort — clearly marked as mock).
+  console.log(`    [Orbit] ⚠️ Static analysis unavailable — using MOCK dependency data (fallback)`);
   return getMockDependencyGraph(file, symbol);
 }
 
