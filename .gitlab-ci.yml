@@ -4,6 +4,7 @@ stages:
 
 variables:
   NODE_VERSION: "20"
+  # GitPulse queries Orbit via REST; analyze job uses GITLAB_TOKEN (api scope).
 
 # Validate that all imports resolve and the CLI loads
 validate:
