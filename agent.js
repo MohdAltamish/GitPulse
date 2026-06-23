@@ -19,7 +19,16 @@ import {
   formatReportForCLI,
 } from "./report.js";
 
-const client = new Anthropic();
+/**
+ * Lazily construct the Anthropic client only when a key is available.
+ * Constructing it unconditionally caused a hard failure (401 invalid x-api-key)
+ * whenever ANTHROPIC_API_KEY was missing, even though the LLM is optional.
+ * @returns {Anthropic|null}
+ */
+function getAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  return new Anthropic();
+}
 
 const SYSTEM_PROMPT = `You are GitPulse, a blast radius analyzer for GitLab repositories.
 
@@ -42,7 +51,15 @@ Your required workflow:
 Do NOT compute the risk score or write the final report yourself. Once you have
 called all four tools, respond with a single short sentence confirming the
 analysis is complete. GitPulse computes the risk score and renders the report
-deterministically from the tool results.`;
+deterministically from the tool results.
+
+HARD RULES (never violate):
+- NEVER invent, recompute, restate, "normalize", "cap", or override the risk
+  score or risk level. The only authoritative score/level is the one produced
+  by calculateRiskScore in report.js and rendered by formatReportForCLI.
+- NEVER present path-inferred or MR-authorship ownership as CODEOWNERS or as a
+  graph-derived "team". If ownership came from MR authorship, say so explicitly.
+- If you summarize, quote the report's numbers verbatim; do not derive new ones.`;
 
 const TOOLS = [
   {
@@ -193,61 +210,81 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
     pipelines: [],
   };
 
-  let response;
-  let iteration = 0;
-  const MAX_ITERATIONS = 10;
+  const client = getAnthropicClient();
 
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
+  if (!client) {
+    // ── Deterministic mode (no ANTHROPIC_API_KEY) ───────────────
+    // The LLM only ever chose WHICH file to analyze; the CLI already provides
+    // it. Run the four tools directly in the SKILL.md order so GitPulse works
+    // fully offline / keyless. The scoring + report engine below is shared.
+    console.log("  ℹ️  No ANTHROPIC_API_KEY — running deterministic analysis (no LLM).");
+    await executeTool("orbit_query_dependents", { file, symbol, depth: 3 }, projectId, collected);
+    const discovered = [
+      ...(collected.graph?.direct || []).map((d) => d.file),
+      ...(collected.graph?.transitive || []).map((d) => d.file),
+    ];
+    const ownerTargets = [file, ...discovered];
+    await executeTool("orbit_get_owners", { files: ownerTargets }, projectId, collected);
+    await executeTool("gitlab_get_open_mrs", { files: ownerTargets, project_id: projectId }, projectId, collected);
+    await executeTool("gitlab_get_pipelines", { files: ownerTargets }, projectId, collected);
+  } else {
+    // ── LLM-driven mode (model orchestrates the same tools) ─────
+    let response;
+    let iteration = 0;
+    const MAX_ITERATIONS = 10;
 
-    response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      tools: TOOLS,
-      messages,
-    });
+    while (iteration < MAX_ITERATIONS) {
+      iteration++;
 
-    // Add assistant response to history
-    messages.push({ role: "assistant", content: response.content });
+      response = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        tools: TOOLS,
+        messages,
+      });
 
-    // If model is done (no more tool calls), break
-    if (response.stop_reason === "end_turn") {
-      break;
-    }
+      // Add assistant response to history
+      messages.push({ role: "assistant", content: response.content });
 
-    // Process tool calls
-    if (response.stop_reason === "tool_use") {
-      const toolResults = [];
-
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
-
-        console.log(`  → Calling ${block.name}...`);
-
-        try {
-          const result = await executeTool(
-            block.name,
-            block.input,
-            projectId,
-            collected
-          );
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          });
-        } catch (error) {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            is_error: true,
-            content: `Error: ${error.message}`,
-          });
-        }
+      // If model is done (no more tool calls), break
+      if (response.stop_reason === "end_turn") {
+        break;
       }
 
-      messages.push({ role: "user", content: toolResults });
+      // Process tool calls
+      if (response.stop_reason === "tool_use") {
+        const toolResults = [];
+
+        for (const block of response.content) {
+          if (block.type !== "tool_use") continue;
+
+          console.log(`  → Calling ${block.name}...`);
+
+          try {
+            const result = await executeTool(
+              block.name,
+              block.input,
+              projectId,
+              collected
+            );
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: JSON.stringify(result),
+            });
+          } catch (error) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: `Error: ${error.message}`,
+            });
+          }
+        }
+
+        messages.push({ role: "user", content: toolResults });
+      }
     }
   }
 

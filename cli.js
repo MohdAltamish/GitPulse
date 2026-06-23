@@ -132,12 +132,12 @@ async function main() {
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.error(
-      "❌ Error: ANTHROPIC_API_KEY is not set. Add it to your .env file.\n"
+    console.log(
+      "ℹ️  ANTHROPIC_API_KEY not set — running deterministic analysis without the LLM."
     );
-    console.error("  cp .env.example .env");
-    console.error("  # Then fill in your Anthropic API key");
-    process.exit(1);
+    console.log(
+      "   (Set ANTHROPIC_API_KEY to enable the model-driven agent loop.)\n"
+    );
   }
 
   // Run the agent

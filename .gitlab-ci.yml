@@ -4,6 +4,7 @@ stages:
 
 variables:
   NODE_VERSION: "20"
+  # GitPulse queries Orbit via REST; analyze job uses GITLAB_TOKEN (api scope).
 
 # Validate that all imports resolve and the CLI loads
 validate:
@@ -43,16 +44,24 @@ test-mock:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# Full integration test (requires ANTHROPIC_API_KEY in CI/CD variables)
-test-integration:
+# Real blast-radius analysis. Runs the deterministic (keyless) pipeline by
+# default; if ANTHROPIC_API_KEY is set the agent uses the LLM-driven loop.
+#
+# Data source for the report:
+#   - Queries the Orbit knowledge graph over REST (POST /api/v4/orbit/query).
+#     CI auto-provides CI_API_V4_URL + CI_JOB_TOKEN, so this is attempted
+#     automatically and yields data_source: "orbit-remote".
+#   - For the most reliable access (if the job token is restricted for the
+#     Orbit endpoint), add a masked GITLAB_TOKEN CI/CD variable with `api` scope.
+#   - If Orbit is unreachable, it cleanly falls back to real static import
+#     analysis (data_source: "static-analysis"), never silent demo data.
+analyze:
   stage: test
   image: node:${NODE_VERSION}-alpine
   script:
     - npm ci
-    - node cli.js --file utils/tax.js --function calculateTax --project-id ${GITLAB_PROJECT_ID:-12345}
+    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID}
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: manual
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   allow_failure: true
-  variables:
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

@@ -1,8 +1,15 @@
 /**
- * Orbit Client — Shared wrapper for `glab orbit remote query`
+ * Orbit Client — Queries the GitLab Orbit Knowledge Graph.
  *
- * Executes Orbit Knowledge Graph queries via the glab CLI.
- * Falls back to null (caller handles fallback) if glab/orbit is unavailable.
+ * Primary transport is the documented REST endpoint:
+ *   POST /api/v4/orbit/query   (body: { query, query_type, response_format })
+ * This needs no external binary, so it works in plain CI containers as long as
+ * a token is available. The `glab orbit remote query` CLI is kept as a
+ * secondary fallback for local dev where a token may not be set.
+ *
+ * Returns null on any failure so callers fall back to static analysis / mock.
+ *
+ * Docs: https://docs.gitlab.com/api/orbit/
  */
 
 import { execFile as execFileCb } from "node:child_process";
@@ -16,49 +23,103 @@ const execFile = promisify(execFileCb);
 /** Whether we've already warned about orbit being unavailable */
 let orbitWarned = false;
 
+/** Resolve the GitLab API v4 base URL (no trailing slash). */
+function apiBaseUrl() {
+  const raw =
+    process.env.CI_API_V4_URL ||
+    process.env.GITLAB_API_URL ||
+    "https://gitlab.com/api/v4";
+  return raw.replace(/\/$/, "");
+}
+
 /**
- * Execute a query against GitLab Orbit Remote via `glab orbit remote query`.
+ * Build auth headers for the Orbit API. Prefer a personal/project token
+ * (PRIVATE-TOKEN); fall back to the CI job token (JOB-TOKEN). Returns null if
+ * neither is available so we can skip HTTP and try the CLI instead.
+ * @returns {Record<string,string>|null}
+ */
+function authHeaders() {
+  const privateToken =
+    process.env.GITLAB_TOKEN ||
+    process.env.ORBIT_TOKEN ||
+    process.env.GITLAB_API_TOKEN;
+  if (privateToken) return { "PRIVATE-TOKEN": privateToken };
+  if (process.env.CI_JOB_TOKEN) return { "JOB-TOKEN": process.env.CI_JOB_TOKEN };
+  return null;
+}
+
+function warnOnce(reason) {
+  if (orbitWarned) return;
+  orbitWarned = true;
+  console.warn(`    ⚠️  [Orbit] Unavailable (${reason}). Falling back.`);
+}
+
+/**
+ * Execute a query against the Orbit Knowledge Graph.
  *
- * @param {object} queryBody - The query object (will be wrapped in { query: ... })
+ * @param {object} queryBody - The query DSL object (wrapped in { query: ... }).
  * @param {object} [options]
- * @param {boolean} [options.showQuery=false] - Log the query body for audit
- * @returns {Promise<object|null>} Parsed JSON response, or null if orbit is unavailable
+ * @param {boolean} [options.showQuery=false] - Log the query body for audit.
+ * @returns {Promise<object|null>} Parsed JSON response, or null if unavailable.
  */
 export async function queryOrbit(queryBody, options = {}) {
-  const fullBody = { query: queryBody };
-  const tmpPath = join(tmpdir(), `gitpulse-q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
-
   if (options.showQuery) {
-    console.log(`    [Orbit Query] ${JSON.stringify(fullBody, null, 2)}`);
+    console.log(`    [Orbit Query] ${JSON.stringify({ query: queryBody }, null, 2)}`);
   }
 
-  try {
-    await writeFile(tmpPath, JSON.stringify(fullBody), "utf-8");
+  // 1) Preferred: REST API over HTTP (no binary needed).
+  const headers = authHeaders();
+  if (headers && typeof fetch === "function") {
+    try {
+      const res = await fetch(`${apiBaseUrl()}/orbit/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({
+          query: queryBody,
+          query_type: "json",
+          response_format: "raw",
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
 
-    const { stdout, stderr } = await execFile(
+      if (res.ok) {
+        return await res.json();
+      }
+      warnOnce(`HTTP ${res.status} from /orbit/query`);
+      // fall through to CLI
+    } catch (error) {
+      warnOnce(`HTTP error: ${error.message}`);
+      // fall through to CLI
+    }
+  } else if (!headers) {
+    warnOnce("no GITLAB_TOKEN/CI_JOB_TOKEN for Orbit REST");
+  }
+
+  // 2) Fallback: glab CLI (local dev convenience).
+  return queryOrbitViaCli(queryBody);
+}
+
+/**
+ * Execute a query via `glab orbit remote query` (secondary transport).
+ * @param {object} queryBody
+ * @returns {Promise<object|null>}
+ */
+async function queryOrbitViaCli(queryBody) {
+  const tmpPath = join(
+    tmpdir(),
+    `gitpulse-q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
+  );
+  try {
+    await writeFile(tmpPath, JSON.stringify({ query: queryBody }), "utf-8");
+    const { stdout } = await execFile(
       "glab",
       ["orbit", "remote", "query", "--format", "raw", tmpPath],
       { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }
     );
-
-    if (stderr && stderr.includes("error")) {
-      console.warn(`    [Orbit] Warning: ${stderr.trim()}`);
-    }
-
-    const result = JSON.parse(stdout);
-    return result;
+    return JSON.parse(stdout);
   } catch (error) {
-    if (!orbitWarned) {
-      orbitWarned = true;
-      const reason = error.code === "ENOENT"
-        ? "glab CLI not found"
-        : error.message.includes("feature flag")
-          ? "Orbit feature flag not enabled"
-          : error.message.includes("auth")
-            ? "glab not authenticated"
-            : error.message;
-      console.warn(`    ⚠️  [Orbit] Unavailable (${reason}). Using mock data as fallback.`);
-    }
+    const reason = error.code === "ENOENT" ? "glab CLI not found" : error.message;
+    warnOnce(reason);
     return null;
   } finally {
     await unlink(tmpPath).catch(() => {});
@@ -66,10 +127,11 @@ export async function queryOrbit(queryBody, options = {}) {
 }
 
 /**
- * Check if glab orbit is available and functional.
+ * Check if Orbit is reachable (REST token present, or glab status succeeds).
  * @returns {Promise<boolean>}
  */
 export async function isOrbitAvailable() {
+  if (authHeaders() && typeof fetch === "function") return true;
   try {
     await execFile("glab", ["orbit", "remote", "status"], { timeout: 10_000 });
     return true;
