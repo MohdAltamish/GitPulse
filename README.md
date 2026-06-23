@@ -347,6 +347,44 @@ This project is structured as a GitLab Duo Agent Platform skill. To publish:
 
 ---
 
+## How GitPulse Compares
+
+The "what depends on this code" problem is crowded, but existing tools each solve only one slice. GitPulse's edge is **multi-signal fusion on a knowledge graph with deterministic scoring**.
+
+### Existing solutions
+
+- **Static dependency/import analyzers** (Madge, dependency-cruiser, NX/Turborepo affected-graph, Bazel query): trace import graphs accurately but are *code-only* — no knowledge of teams, open MRs, pipelines, or risk. They tell you files, not consequences.
+- **Code-ownership tools** (CODEOWNERS, git blame): map files to owners but do no dependency traversal and no impact scoring.
+- **CI impact analysis** (NX affected, Turborepo, Bazel): compute affected build/test targets for caching, not human-facing risk reports or reviewer suggestions.
+- **Codebase Q&A AI** (Sourcegraph Cody, generic Duo Chat, Cursor): can answer "who imports X" conversationally but lack a deterministic, reproducible risk score and don't correlate live MRs or pipelines.
+- **Test impact analysis** (Launchable, Sealights): predict which tests to run — a narrower goal than cross-team merge safety.
+
+### What makes GitPulse stand out (USP)
+
+> **The only pre-merge gate that fuses dependency graph, team ownership, in-flight MRs, and pipeline risk into one deterministic, reproducible safety verdict on GitLab's knowledge graph.**
+
+1. **Multi-signal fusion** — dependents + teams + overlapping open MRs + pipelines combined into one `risk_score` and a binary `safe_to_merge` flag.
+2. **Live, cross-team context** — open-MR correlation (`HAS_DIFF → HAS_FILE`, `state: opened`) catches in-flight collisions that pure static analyzers structurally cannot see.
+3. **Deterministic, auditable scoring** — the risk formula and guardrails live in `report.js`, not in the LLM, so the same input always yields the same score (exactly what a merge gate needs).
+4. **Enforced safety guardrails** — 3+ teams forces HIGH; any overlapping open MR forces `safe_to_merge: false`; minimum depth 2 is mandatory; unknown ownership is flagged, never silently dropped.
+5. **Native Orbit knowledge-graph leverage** — uses GitLab's own graph rather than re-implementing parsing.
+6. **Actionable output** — suggested reviewers from real ownership, teams to notify, and CI-consumable JSON (`--format json`).
+
+### Capability comparison
+
+| Capability | Static analyzers (Madge, dep-cruiser, NX) | CODEOWNERS / blame | AI code Q&A (Cody, Cursor) | **GitPulse** |
+|---|---|---|---|---|
+| Dependency traversal (transitive) | ✅ | ❌ | ⚠️ approximate | ✅ depth ≥ 2 |
+| Team/owner mapping | ❌ | ✅ | ❌ | ✅ from MR history |
+| In-flight open-MR collision | ❌ | ❌ | ❌ | ✅ |
+| Pipeline risk | ⚠️ build targets only | ❌ | ❌ | ✅ |
+| Deterministic risk score | ✅ static only | ❌ | ❌ | ✅ formula + guardrails |
+| Reviewer suggestions | ❌ | ⚠️ owners only | ❌ | ✅ |
+| `safe_to_merge` verdict | ❌ | ❌ | ❌ | ✅ |
+| CI-gate JSON output | ⚠️ | ❌ | ❌ | ✅ |
+
+---
+
 ## Hackathon
 
 Built for **GitLab Transcend Hackathon 2026** — Showcase Track.
