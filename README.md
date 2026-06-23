@@ -1,93 +1,199 @@
-# GitPulse
+# GitPulse — Blast Radius Analyzer
 
+> *"Before you push, know what breaks."*
 
+GitPulse is an AI-powered agent built on the **GitLab Duo Agent Platform** that uses **GitLab Orbit's knowledge graph** to trace every dependent of a file or function you're about to change. It produces an instant **Blast Radius Report** — complete with risk score, affected teams, open MRs, and suggested reviewers.
 
-## Getting started
+Built for the **GitLab Transcend Hackathon 2025** (Showcase Track).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+---
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## The Problem
 
-## Add your files
+A developer changes `calculateTax()` in `utils/tax.js`. Three days later, production breaks in a microservice nobody knew depended on it. The post-mortem always ends the same way: *"We didn't know that was connected."*
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Manual dependency hunting takes 30+ minutes and still misses things. GitPulse makes it **10 seconds and complete** by querying Orbit's knowledge graph.
+
+---
+
+## How It Works
+
+GitPulse uses **GitLab Orbit** (the knowledge graph) via `glab orbit remote query` to:
+
+1. **Traverse dependencies** — Query the `ImportedSymbol` entity to find every file that imports the target
+2. **Map ownership** — Trace `MergeRequest → MergeRequestDiff → MergeRequestDiffFile → User` to find who owns each file
+3. **Find conflicting MRs** — Discover open merge requests touching the same files
+4. **Assess pipeline risk** — Identify CI/CD pipelines that would be affected
+5. **Score and report** — Calculate a risk score and produce a structured report with suggested reviewers
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/altamish6589/gitpulse.git
-git branch -M main
-git push -uf origin main
+User Input (file/function)
+        │
+        ▼
+  GitPulse Agent (Claude via Anthropic API)
+        │
+        ├── GitLab Orbit Knowledge Graph (via glab orbit remote)
+        │     ├── ImportedSymbol traversal (dependency graph)
+        │     ├── MergeRequest → User traversal (ownership)
+        │     └── Pipeline queries (CI/CD risk)
+        │
+        └── Blast Radius Report (JSON + formatted CLI output)
 ```
 
-## Integrate with your tools
+---
 
-* [Set up project integrations](https://gitlab.com/altamish6589/gitpulse/-/settings/integrations)
+## Demo
 
-## Collaborate with your team
+```bash
+# Analyze blast radius of a function
+node cli.js --file utils/tax.js --function calculateTax --project-id 12345
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+# Output
+📊 Blast Radius Report — utils/tax.js::calculateTax()
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 Risk: HIGH  (9 dependents across 3 teams)
 
-## Test and Deploy
+📁 Direct Dependents (files that import this)
+  ├── src/checkout/CartService.js       (Team: team-checkout)
+  ├── src/invoicing/InvoiceGen.js       (Team: team-finance)
+  └── src/reports/TaxSummary.js         (Team: team-reports)
 
-Use the built-in continuous integration in GitLab.
+🔗 Transitive Dependents (files that depend on those)
+  ├── src/checkout/CheckoutFlow.jsx
+  ├── src/checkout/OrderConfirmation.jsx
+  └── ... 4 more
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+👥 Teams to Notify
+  ├── #team-checkout    (3 files affected)
+  ├── #team-finance     (3 files affected)
+  └── #team-reports     (2 files affected)
 
-***
+🔀 Open MRs Touching Related Code
+  ├── !234 — "Add EU tax rates" by @alice
+  └── !289 — "Refactor invoice generation" by @bob
 
-# Editing this README
+⚙️  Pipelines at Risk
+  └── checkout-service-ci, invoice-gen-ci, reports-ci
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+✅ Suggested Reviewers
+  └── @alice, @bob, @carol (owners of affected files)
 
-## Suggestions for a good README
+📋 Safe to merge without notifying these teams? 🚫 NO
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+---
 
-## Name
-Choose a self-explaining name for your project.
+## Quick Start
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```bash
+# Clone the repo
+git clone https://gitlab.com/altamish6589/gitpulse.git
+cd gitpulse
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+# Install dependencies
+npm install
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+# Set up environment
+cp .env.example .env
+# Fill in ANTHROPIC_API_KEY (required)
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+# Ensure glab is authenticated for Orbit queries
+glab auth status
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+# Run analysis
+node cli.js --file utils/tax.js --function calculateTax --project-id 12345
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+# JSON output for CI integration
+node cli.js --file utils/tax.js --format json --project-id 12345
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+---
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## GitLab Orbit Integration
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+GitPulse queries Orbit via `glab orbit remote query` with these patterns:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+| Query | Orbit Entity | Relationship | Purpose |
+|-------|-------------|-------------|---------|
+| Find dependents | `ImportedSymbol` | `import_path` filter | Trace who imports the target file |
+| Find owners | `MergeRequest` → `User` | `HAS_DIFF`, `HAS_FILE`, `AUTHORED` | Map files to their last committers |
+| Open MRs | `MergeRequest` → `MergeRequestDiffFile` | `HAS_DIFF`, `HAS_FILE` | Find MRs touching the same files |
+| Pipelines | `Pipeline` | `source` filter | Identify affected CI/CD pipelines |
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+If Orbit is unavailable (no `glab`, auth issues, feature flag), GitPulse falls back to mock data with a clear warning.
 
-## License
-For open source projects, say how it is licensed.
+---
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Project Structure
+
+```
+gitpulse/
+├── AGENTS.md                  ← Agent behavior spec (Duo Agent Platform)
+├── LICENSE                    ← MIT License
+├── README.md                  ← This file
+├── .gitlab-ci.yml             ← CI/CD pipeline
+├── skills/
+│   └── blast-radius/
+│       └── SKILL.md           ← Duo Agent Platform skill definition
+├── agent.js                   ← Main Claude agent loop
+├── orbit.js                   ← Orbit knowledge graph queries
+├── orbit-client.js            ← glab orbit remote CLI wrapper
+├── gitlab.js                  ← MR & pipeline queries via Orbit
+├── report.js                  ← Risk scoring + report generation
+├── cli.js                     ← CLI entry point
+├── package.json
+├── .env.example
+└── .gitignore
+```
+
+---
+
+## Stack
+
+- **Agent**: Claude Sonnet (via Anthropic API) — reasoning + report generation
+- **Graph**: GitLab Orbit — dependency knowledge graph (via `glab orbit remote`)
+- **Platform**: GitLab Duo Agent Platform — AGENTS.md + SKILL.md conventions
+- **CLI**: Node.js with ESM modules
+- **CI**: GitLab CI/CD
+
+---
+
+## Publishing to AI Catalog
+
+This project is structured as a GitLab Duo Agent Platform skill. To publish:
+
+1. Push to GitLab.com as a public project
+2. Navigate to **AI > Agents** in the project sidebar
+3. Create a new agent with the blast-radius skill
+4. Set visibility to **Public**
+5. The agent appears in **Explore > AI Catalog** for others to enable
+
+---
+
+## Risk Scoring Formula
+
+```
+score = (direct_dependents × 5)
+      + (transitive_dependents × 2)
+      + (teams_affected × 10)
+      + (open_mr_overlaps × 15)
+      + (pipeline_count × 5)
+
+LOW:    score < 30
+MEDIUM: score 30–60
+HIGH:   score > 60
+```
+
+**Guardrails**: 3+ teams → always HIGH. Open MR overlap → never `safe_to_merge`.
+
+---
+
+## Hackathon
+
+Built for **GitLab Transcend Hackathon 2025** — Showcase Track.
+
+**Developer Pain Point**: Developers change shared code without knowing what depends on it, causing unexpected breakage in production.
+
+**How GitPulse Fixes It**: By querying GitLab Orbit's knowledge graph, GitPulse traces every dependent file, maps team ownership, finds conflicting MRs, and produces an actionable blast radius report — all in seconds.
+
+**What Changes for the Developer**: Instead of manually searching imports for 30+ minutes (and still missing things), developers get a complete, risk-scored impact analysis before every merge. Teams get notified, reviewers get suggested, and unsafe merges get flagged.

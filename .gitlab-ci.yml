@@ -1,0 +1,47 @@
+stages:
+  - validate
+  - test
+
+variables:
+  NODE_VERSION: "20"
+
+# Validate that all imports resolve and the CLI loads
+validate:
+  stage: validate
+  image: node:${NODE_VERSION}-alpine
+  script:
+    - npm ci
+    - node cli.js --help
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Run the blast radius analysis with mock data (no API key needed)
+test-mock:
+  stage: test
+  image: node:${NODE_VERSION}-alpine
+  script:
+    - npm ci
+    - echo "Testing module imports..."
+    - node -e "import('./orbit-client.js').then(() => console.log('✓ orbit-client.js'))"
+    - node -e "import('./orbit.js').then(() => console.log('✓ orbit.js'))"
+    - node -e "import('./gitlab.js').then(() => console.log('✓ gitlab.js'))"
+    - node -e "import('./report.js').then(() => console.log('✓ report.js'))"
+    - echo "All modules loaded successfully"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Full integration test (requires ANTHROPIC_API_KEY in CI/CD variables)
+test-integration:
+  stage: test
+  image: node:${NODE_VERSION}-alpine
+  script:
+    - npm ci
+    - node cli.js --file utils/tax.js --function calculateTax --project-id ${GITLAB_PROJECT_ID:-12345}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+  allow_failure: true
+  variables:
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

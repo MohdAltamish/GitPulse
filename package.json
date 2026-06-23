@@ -1,0 +1,28 @@
+{
+  "name": "gitpulse",
+  "version": "1.0.0",
+  "description": "AI-powered blast radius analyzer for GitLab repositories — trace every dependent before you merge.",
+  "type": "module",
+  "main": "cli.js",
+  "bin": {
+    "gitpulse": "./cli.js"
+  },
+  "scripts": {
+    "analyze": "node cli.js",
+    "start": "node cli.js"
+  },
+  "keywords": [
+    "gitlab",
+    "orbit",
+    "blast-radius",
+    "dependency-analysis",
+    "code-review",
+    "ai-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "dotenv": "^16.6.1"
+  }
+}
