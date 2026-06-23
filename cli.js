@@ -16,6 +16,10 @@
 
 import "dotenv/config";
 import { runBlastRadiusAgent } from "./agent.js";
+import { postReportComment } from "./mr-comment.js";
+
+/** Rank risk levels so --fail-on can compare thresholds. */
+const RISK_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
 
 // ─── Arg Parsing ────────────────────────────────────────────────
 
@@ -25,6 +29,10 @@ function parseArgs(argv) {
     function: null,
     projectId: process.env.GITLAB_PROJECT_ID || null,
     format: "text", // "text" or "json"
+    requireOrbit: false, // hard-fail if data_source != orbit-remote
+    failOn: null, // "LOW" | "MEDIUM" | "HIGH" => exit 1 at/above this risk
+    strict: false, // exit 1 when safe_to_merge is false
+    comment: false, // post the report as an MR note
     help: false,
   };
 
@@ -49,6 +57,18 @@ function parseArgs(argv) {
         break;
       case "--json":
         args.format = "json";
+        break;
+      case "--require-orbit":
+        args.requireOrbit = true;
+        break;
+      case "--fail-on":
+        args.failOn = String(argv[++i] || "").toUpperCase();
+        break;
+      case "--strict":
+        args.strict = true;
+        break;
+      case "--comment":
+        args.comment = true;
         break;
       case "--help":
       case "-h":
@@ -83,6 +103,10 @@ OPTIONS:
   --project-id, -p <id>      GitLab project ID (or set GITLAB_PROJECT_ID)
   --format <text|json>       Output format (default: text)
   --json                     Shorthand for --format json
+  --require-orbit            Exit non-zero unless data came from the real Orbit graph
+  --fail-on <LOW|MED|HIGH>   Exit non-zero when risk is at/above this level
+  --strict                   Exit non-zero when safe_to_merge is false
+  --comment                  Post the report as a note on the current MR (CI)
   --help, -h                 Show this help message
 
 EXAMPLES:
@@ -162,6 +186,42 @@ async function main() {
 
     console.log("\n" + "━".repeat(60));
     console.log("✨ Analysis complete.");
+
+    // ── Optional MR comment (CI integration) ──────────────────────
+    if (args.comment) {
+      const mrIid = process.env.CI_MERGE_REQUEST_IID;
+      const result = await postReportComment(reportObject, {
+        projectId: args.projectId,
+        mrIid,
+      });
+      if (result.ok) {
+        console.log(`💬 MR comment ${result.action}.`);
+      } else {
+        console.warn(`⚠️  MR comment ${result.action}: ${result.reason}`);
+      }
+    }
+
+    // ── Enforcing gates (exit codes change reviewer behavior) ──────
+    if (args.requireOrbit && reportObject.data_source !== "orbit-remote") {
+      console.error(
+        `\n❌ --require-orbit set but data_source was "${reportObject.data_source}". Real Orbit graph data was not available.`
+      );
+      process.exit(1);
+    }
+
+    if (args.strict && reportObject.safe_to_merge === false) {
+      console.error("\n❌ --strict: report is not safe_to_merge.");
+      process.exit(1);
+    }
+
+    if (args.failOn && RISK_RANK[args.failOn]) {
+      if (RISK_RANK[reportObject.risk] >= RISK_RANK[args.failOn]) {
+        console.error(
+          `\n❌ --fail-on ${args.failOn}: risk is ${reportObject.risk}.`
+        );
+        process.exit(1);
+      }
+    }
   } catch (error) {
     console.error(`\n❌ GitPulse error: ${error.message}`);
 

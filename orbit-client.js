@@ -23,6 +23,14 @@ const execFile = promisify(execFileCb);
 /** Whether we've already warned about orbit being unavailable */
 let orbitWarned = false;
 
+/** Which transport produced the last successful response: 'rest' | 'cli' | null */
+let lastTransport = null;
+
+/** @returns {('rest'|'cli'|null)} transport of the last successful Orbit query */
+export function getLastTransport() {
+  return lastTransport;
+}
+
 /** Resolve the GitLab API v4 base URL (no trailing slash). */
 function apiBaseUrl() {
   const raw =
@@ -83,6 +91,7 @@ export async function queryOrbit(queryBody, options = {}) {
       });
 
       if (res.ok) {
+        lastTransport = "rest";
         return await res.json();
       }
       warnOnce(`HTTP ${res.status} from /orbit/query`);
@@ -116,6 +125,7 @@ async function queryOrbitViaCli(queryBody) {
       ["orbit", "remote", "query", "--format", "raw", tmpPath],
       { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }
     );
+    lastTransport = "cli";
     return JSON.parse(stdout);
   } catch (error) {
     const reason = error.code === "ENOENT" ? "glab CLI not found" : error.message;
@@ -131,11 +141,13 @@ async function queryOrbitViaCli(queryBody) {
  * @returns {Promise<boolean>}
  */
 export async function isOrbitAvailable() {
-  if (authHeaders() && typeof fetch === "function") return true;
-  try {
-    await execFile("glab", ["orbit", "remote", "status"], { timeout: 10_000 });
-    return true;
-  } catch {
-    return false;
-  }
+  // Issue a real, minimal query so we confirm the graph actually answers,
+  // rather than merely asserting a token is present.
+  const probe = {
+    query_type: "traversal",
+    node: { id: "p", entity: "Pipeline" },
+    limit: 1,
+  };
+  const result = await queryOrbit(probe);
+  return result !== null;
 }

@@ -228,6 +228,9 @@ export function formatReportForCLI(report) {
   lines.push("");
   lines.push(`📊 Blast Radius Report — ${targetLabel}`);
   lines.push("━".repeat(60));
+  lines.push(
+    `Data source: ${report.data_source} (real graph: ${report.is_real_data ? "yes" : "no"})`
+  );
   if (!report.is_real_data) {
     lines.push(
       `⚠️  MOCK DATA (source: ${report.data_source}). Orbit was unavailable — this report is DEMO data, not a real blast-radius trace. Do not use it for merge decisions.`
