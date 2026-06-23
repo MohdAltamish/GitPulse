@@ -297,19 +297,34 @@ Use `--format json` to emit this object directly for CI consumption; the default
 
 ## Running in CI
 
-The `.gitlab-ci.yml` `analyze` job runs a real blast-radius analysis on every MR pipeline:
+The `.gitlab-ci.yml` pipeline has three stages — `validate`, `test`, `gate` — and runs on every MR pipeline and on the default branch. No `ANTHROPIC_API_KEY` is needed (deterministic mode); CI auto-provides `CI_API_V4_URL` + `CI_JOB_TOKEN` so Orbit is queried automatically. For the most reliable Orbit access, add a masked `api`-scoped `GITLAB_TOKEN` CI/CD variable.
+
+| Stage | Job | What it does | Blocks? |
+|-------|-----|--------------|---------|
+| validate | `label-guard` | Fails the MR pipeline if the `orbit::hackathon` label is missing (Contribute Track) | ✅ yes |
+| validate | `validate` | `npm ci` + `node cli.js --help` (imports resolve, CLI loads) | ✅ yes |
+| test | `unit-test` | `npm test` (deterministic scoring + parser + MR-comment suites) | ✅ yes |
+| test | `test-mock` | Smoke-tests that every ESM module imports cleanly | ✅ yes |
+| test | `analyze` | Real blast-radius run on `orbit.js` | `allow_failure` |
+| test | `orbit-proof` | `--require-orbit --format json`; uploads `orbit-report.json` as a 30-day artifact — hard proof the real graph answered | `allow_failure` |
+| gate | `risk-gate` | `--fail-on HIGH` on `GITPULSE_TARGET` (default `report.js`); exits non-zero on HIGH | `allow_failure` here* |
+| gate | `mr-report` | Posts/updates the report as an MR note (`--comment`) | `allow_failure` |
 
 ```yaml
-analyze:
+orbit-proof:
   stage: test
   image: node:20-alpine
   script:
     - npm ci
-    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID}
+    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID} --format json --require-orbit | tee orbit-report.json
+  artifacts:
+    paths: [orbit-report.json]
+    when: always
+    expire_in: 30 days
   allow_failure: true
 ```
 
-It needs no `ANTHROPIC_API_KEY` (deterministic mode). With a `GITLAB_TOKEN` CI/CD variable it queries the real Orbit graph (`data_source: "orbit-remote"`); otherwise it falls back to real static analysis. Other jobs: `validate` (CLI loads), `unit-test` (`npm test`), `test-mock` (module imports).
+*`risk-gate` is `allow_failure` **only in this repo**, because GitPulse self-analyzes here and nearly every module overlaps the open MR + many pipelines, so it always scores HIGH. For a consumer project, copy the `risk-gate` job **without** `allow_failure` to make a HIGH-risk change a hard block. The `mr-report` job needs a masked `api`-scoped `GITLAB_TOKEN`; it soft-fails (skips) otherwise.
 
 ---
 
