@@ -170,6 +170,11 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
 
   const summary = `${totalDependents} dependents across ${teamCount} team${teamCount !== 1 ? "s" : ""}. ${openMRs.length} open MR${openMRs.length !== 1 ? "s" : ""} touch${openMRs.length === 1 ? "es" : ""} related code.`;
 
+  // Single canonical, non-overridable score line. Anything rendering or
+  // summarizing the report must use this verbatim — it is the ONLY source of
+  // truth for the level/score and is computed solely by calculateRiskScore.
+  const riskLine = `Risk: ${score.level} (score: ${score.score}/100)`;
+
   return {
     target: {
       file,
@@ -177,6 +182,7 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
     },
     risk: score.level,
     risk_score: score.score,
+    risk_line: riskLine,
     summary,
     dependents: {
       direct: directDeps,
@@ -210,9 +216,10 @@ export function formatReportForCLI(report) {
   lines.push("");
   lines.push(`📊 Blast Radius Report — ${targetLabel}`);
   lines.push("━".repeat(60));
-  lines.push(
-    `${riskEmoji[risk] || "⚪"} Risk: ${risk}  (score: ${risk_score}/100)`
-  );
+  // Render the canonical risk line straight from the scoring engine. Never
+  // recompute or "normalize" here — this guarantees the displayed level/score
+  // matches calculateRiskScore exactly.
+  lines.push(`${riskEmoji[risk] || "⚪"} ${report.risk_line}`);
   lines.push(`   ${summary}`);
   lines.push("");
 

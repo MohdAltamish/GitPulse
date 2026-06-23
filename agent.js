@@ -42,7 +42,15 @@ Your required workflow:
 Do NOT compute the risk score or write the final report yourself. Once you have
 called all four tools, respond with a single short sentence confirming the
 analysis is complete. GitPulse computes the risk score and renders the report
-deterministically from the tool results.`;
+deterministically from the tool results.
+
+HARD RULES (never violate):
+- NEVER invent, recompute, restate, "normalize", "cap", or override the risk
+  score or risk level. The only authoritative score/level is the one produced
+  by calculateRiskScore in report.js and rendered by formatReportForCLI.
+- NEVER present path-inferred or MR-authorship ownership as CODEOWNERS or as a
+  graph-derived "team". If ownership came from MR authorship, say so explicitly.
+- If you summarize, quote the report's numbers verbatim; do not derive new ones.`;
 
 const TOOLS = [
   {
