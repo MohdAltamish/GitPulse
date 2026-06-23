@@ -93,15 +93,20 @@ async function queryOrbitDependents(file, symbol) {
   const filePath = file;
 
   // Query 1: Find files that import this module via ImportedSymbol
+  const orbitProjectId = process.env.CI_PROJECT_ID || process.env.GITLAB_PROJECT_ID;
+  const importFilters = {
+    import_path: { op: "contains", value: fileBaseName },
+  };
+  if (orbitProjectId) {
+    importFilters.project_id = { op: "eq", value: parseInt(orbitProjectId, 10) };
+  }
   const importQuery = {
     query_type: "traversal",
     node: {
       id: "imp",
       entity: "ImportedSymbol",
-      filters: {
-        import_path: { op: "contains", value: fileBaseName },
-      },
-      columns: ["file_path", "import_path", "name"],
+      filters: importFilters,
+      columns: ["file_path", "import_path", "identifier_name", "import_type"],
     },
     limit: 100,
   };
@@ -134,15 +139,19 @@ async function queryOrbitDependents(file, symbol) {
   if (directDeps.length > 0 && directDeps.length <= 20) {
     for (const dep of directDeps.slice(0, 5)) {
       const depBaseName = dep.file.replace(/\.[jt]sx?$/, "").split("/").pop();
+      const transitiveFilters = {
+        import_path: { op: "contains", value: depBaseName },
+      };
+      if (orbitProjectId) {
+        transitiveFilters.project_id = { op: "eq", value: parseInt(orbitProjectId, 10) };
+      }
       const transitiveQuery = {
         query_type: "traversal",
         node: {
           id: "imp2",
           entity: "ImportedSymbol",
-          filters: {
-            import_path: { op: "contains", value: depBaseName },
-          },
-          columns: ["file_path", "import_path"],
+          filters: transitiveFilters,
+          columns: ["file_path", "import_path", "identifier_name"],
         },
         limit: 20,
       };
