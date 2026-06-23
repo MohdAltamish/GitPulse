@@ -162,9 +162,13 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
   }
   const suggestedReviewers = Array.from(reviewerSet);
 
-  // Data provenance: 'orbit-remote' = real graph, anything else = mock fallback.
+  // Data provenance:
+  //   'orbit-remote'    = real Orbit knowledge graph (best)
+  //   'static-analysis' = real local import analysis (real, but no MR/owner graph)
+  //   anything else     = fictional mock fallback
   const dataSource = (graph.metadata && graph.metadata.source) || "unknown";
-  const isRealData = dataSource === "orbit-remote";
+  const isRealData =
+    dataSource === "orbit-remote" || dataSource === "static-analysis";
 
   // Safe to merge? (AGENTS.md guardrail: never true if overlapping open MRs).
   // Never certify a merge from mock/unknown data either.
@@ -221,6 +225,11 @@ export function formatReportForCLI(report) {
   if (!report.is_real_data) {
     lines.push(
       `⚠️  MOCK DATA (source: ${report.data_source}). Orbit was unavailable — this report is DEMO data, not a real blast-radius trace. Do not use it for merge decisions.`
+    );
+    lines.push("━".repeat(60));
+  } else if (report.data_source === "static-analysis") {
+    lines.push(
+      `ℹ️  Dependency graph from LOCAL static import analysis (Orbit unavailable). Dependents are real; team/owner data may be limited.`
     );
     lines.push("━".repeat(60));
   }
