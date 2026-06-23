@@ -74,64 +74,89 @@ async function queryOrbitOpenMRs(files, projectId) {
   // Query for each file (batch up to 5 to respect iteration budget)
   const allMRs = new Map(); // keyed by MR iid to deduplicate
 
-  for (const file of files.slice(0, 5)) {
-    const query = {
-      query_type: "traversal",
-      nodes: [
-        {
-          id: "mr",
-          entity: "MergeRequest",
-          columns: ["iid", "title", "state", "web_url", "source_branch", "created_at"],
-          filters: {
-            state: "opened",
-            project_id: { op: "eq", value: parseInt(projectId, 10) },
-          },
-        },
-        { id: "diff", entity: "MergeRequestDiff" },
-        {
-          id: "f",
-          entity: "MergeRequestDiffFile",
-          filters: { old_path: { op: "ends_with", value: file } },
-        },
-        {
-          id: "author",
-          entity: "User",
-          columns: ["username", "name"],
-        },
-      ],
-      relationships: [
-        { type: "HAS_DIFF", from: "mr", to: "diff" },
-        { type: "HAS_FILE", from: "diff", to: "f" },
-        { type: "AUTHORED", from: "author", to: "mr" },
-      ],
-      limit: 20,
-    };
+  // Match files by basename so a diff file path like "src/orbit.js" overlaps
+  // a target "orbit.js". Build the set once.
+  const targetBaseNames = new Set(
+    files.map((f) => f.split("/").pop())
+  );
 
-    const result = await queryOrbit(query);
-    if (!result) return null; // Fall back entirely
+  // Single traversal: open MRs in this project and their changed files.
+  // Use default columns (an explicit allowlist is rejected by the API) and
+  // the {op:"eq"} filter form verified against the live graph.
+  const query = {
+    query_type: "traversal",
+    nodes: [
+      {
+        id: "mr",
+        entity: "MergeRequest",
+        filters: {
+          state: { op: "eq", value: "opened" },
+          project_id: { op: "eq", value: parseInt(projectId, 10) },
+        },
+      },
+      { id: "diff", entity: "MergeRequestDiff" },
+      { id: "f", entity: "MergeRequestDiffFile" },
+    ],
+    relationships: [
+      { type: "HAS_DIFF", from: "mr", to: "diff" },
+      { type: "HAS_FILE", from: "diff", to: "f" },
+    ],
+    limit: 500,
+  };
 
-    const rows = extractRows(result);
-    for (const row of rows) {
-      const iid = row.iid || row.mr_iid;
-      if (iid && !allMRs.has(iid)) {
-        allMRs.set(iid, {
-          id: iid,
-          title: row.title || row.mr_title || `MR !${iid}`,
-          author: row.username || row.author_username
-            ? `@${row.username || row.author_username}`
-            : "@unknown",
-          url: row.web_url || row.mr_web_url || `https://gitlab.com/project/${projectId}/-/merge_requests/${iid}`,
-          state: "opened",
-          source_branch: row.source_branch || row.mr_source_branch,
-          overlap: [file],
-        });
-      } else if (iid && allMRs.has(iid)) {
-        // Same MR touches multiple files — extend overlap
-        const existing = allMRs.get(iid);
-        if (!existing.overlap.includes(file)) {
-          existing.overlap.push(file);
-        }
-      }
+  const result = await queryOrbit(query);
+  if (!result) return null; // Fall back entirely
+
+  // The graph response interleaves MergeRequest, MergeRequestDiff and
+  // MergeRequestDiffFile nodes plus HAS_DIFF/HAS_FILE edges. Reconstruct which
+  // files belong to which MR, then keep MRs that touch a target file.
+  const raw = result.result || result;
+  const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+  const edges = Array.isArray(raw.edges) ? raw.edges : [];
+
+  const mrById = new Map();
+  const diffToMr = new Map();   // MergeRequestDiff id -> MergeRequest id
+  const fileById = new Map();   // MergeRequestDiffFile id -> {old_path,new_path}
+  const fileToDiff = new Map(); // MergeRequestDiffFile id -> MergeRequestDiff id
+
+  for (const n of nodes) {
+    if (n.type === "MergeRequest") mrById.set(String(n.id), n);
+    else if (n.type === "MergeRequestDiffFile") {
+      fileById.set(String(n.id), n);
+    }
+  }
+  for (const e of edges) {
+    if (e.type === "HAS_DIFF") diffToMr.set(String(e.to_id), String(e.from_id));
+    else if (e.type === "HAS_FILE") fileToDiff.set(String(e.to_id), String(e.from_id));
+  }
+
+  // For each changed file, resolve its MR and record overlap if it matches.
+  for (const [fileId, fnode] of fileById) {
+    const path = fnode.old_path || fnode.new_path || "";
+    const base = path.split("/").pop();
+    if (!base || !targetBaseNames.has(base)) continue;
+
+    const diffId = fileToDiff.get(fileId);
+    const mrId = diffId && diffToMr.get(diffId);
+    const mr = mrId && mrById.get(mrId);
+    if (!mr) continue;
+
+    const iid = mr.iid || mr.id;
+    if (!allMRs.has(iid)) {
+      allMRs.set(iid, {
+        id: iid,
+        title: mr.title || `MR !${iid}`,
+        author: "@unknown",
+        url:
+          mr.web_url ||
+          `https://gitlab.com/gitlab-ai-hackathon/transcend/35602696/-/merge_requests/${iid}`,
+        state: "opened",
+        source_branch: mr.source_branch,
+        overlap: [base],
+      });
+    } else {
+      const existing = allMRs.get(iid);
+      if (!existing.overlap.includes(base)) existing.overlap.push(base);
     }
   }
 
@@ -164,25 +189,21 @@ async function queryOrbitPipelines(files) {
   const rows = extractRows(result);
   if (rows.length === 0) return null;
 
-  // Map files to inferred pipeline names and augment with real pipeline data
+  // Return the real recent pipelines from the graph (most recent first),
+  // de-duplicated by id. No path-based name inference.
   const pipelines = [];
-  const seenPatterns = new Set();
-
-  for (const file of files) {
-    const pipelineName = inferPipelineFromPath(file);
-    if (pipelineName && !seenPatterns.has(pipelineName)) {
-      seenPatterns.add(pipelineName);
-      // Find a matching real pipeline if possible
-      const matchingRow = rows.find(
-        (r) => (r.ref || "").includes(pipelineName.split("-")[0])
-      );
-      pipelines.push({
-        name: pipelineName,
-        last_status: matchingRow ? matchingRow.status || "unknown" : "unknown",
-        source: "orbit-remote",
-        triggered_by_files: files.filter((f) => inferPipelineFromPath(f) === pipelineName),
-      });
-    }
+  const seen = new Set();
+  for (const row of rows) {
+    const id = row.id || row.p_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const ref = row.ref || row.p_ref || "unknown";
+    pipelines.push({
+      name: `pipeline #${row.iid || id} (${ref})`,
+      last_status: row.status || row.p_status || "unknown",
+      ref,
+      source: "orbit-remote",
+    });
   }
 
   return pipelines.length > 0 ? pipelines : null;
