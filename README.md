@@ -65,18 +65,23 @@ cli.js  ──→  agent.js (optional Claude loop, model: claude-sonnet-4-6)
                  │
                  ├── orbit.js          → dependency traversal + ownership
                  │     ├── orbit-client.js → Orbit REST client (POST /api/v4/orbit/query)
+                 │     │     └── gitlab-api.js → shared base-URL + auth headers
                  │     └── static-analysis.js → real import-graph fallback (no Orbit)
                  ├── gitlab.js         → open MRs + pipelines via Orbit
-                 └── report.js         → deterministic scoring + report builder
+                 ├── report.js         → deterministic scoring + report builder
+                 └── mr-comment.js     → idempotent MR-note posting (--comment)
+                       └── gitlab-api.js → shared base-URL + auth headers
 ```
 
-- **`cli.js`** parses arguments, invokes the agent, and prints text or JSON output. It runs with or without an API key.
+- **`cli.js`** parses arguments, invokes the agent, prints text or JSON output, posts the optional MR comment, and applies the enforcing exit-code gates (`--require-orbit`, `--fail-on`, `--strict`). It runs with or without an API key.
 - **`agent.js`** runs the Claude loop with four tool definitions when a key is present, or executes the tools deterministically when it is not, then calls `report.js` so scoring never depends on what the model "decides" the risk is.
 - **`orbit.js`** implements `orbitQueryDependents` and `orbitGetOwners`, with a real static-analysis fallback ahead of mock.
 - **`gitlab.js`** implements `gitlabGetOpenMRs` and `gitlabGetPipelines`.
 - **`orbit-client.js`** queries the Orbit REST API directly (no external binary required); `glab orbit remote query` is a secondary fallback for local dev.
+- **`gitlab-api.js`** centralizes `apiBaseUrl()` and `authHeaders()` so the Orbit client and the MR-comment integration share one auth/transport definition.
 - **`static-analysis.js`** parses real `import`/`export ... from` statements across the repo to build a true reverse-dependency graph when Orbit is unavailable.
 - **`report.js`** holds `calculateRiskScore`, `buildReport`, and `formatReportForCLI`.
+- **`mr-comment.js`** renders the report as markdown and posts (or updates in place) a GitPulse note on the MR via a hidden marker.
 
 ---
 
@@ -117,6 +122,10 @@ npm run analyze -- --file <path> [options]
 | `--project-id <id>` | `--project`, `-p` | GitLab project ID (or set `GITLAB_PROJECT_ID`) |
 | `--format <text\|json>` | | Output format (default: `text`) |
 | `--json` | | Shorthand for `--format json` |
+| `--require-orbit` | | Exit non-zero unless `data_source === "orbit-remote"` (proves real graph) |
+| `--fail-on <LOW\|MEDIUM\|HIGH>` | | Exit non-zero when risk is at/above this level (CI gate) |
+| `--strict` | | Exit non-zero when `safe_to_merge` is `false` |
+| `--comment` | | Post (or update) the report as a note on the current MR (CI) |
 | `--help` | `-h` | Show help |
 
 A bare positional argument is treated as the file path, so `node cli.js orbit.js -p 83678311` also works.
@@ -136,23 +145,28 @@ node cli.js --file orbit.js --format json --project-id 83678311
 
 ### Example Output (real Orbit data)
 
+Verbatim from the CI `orbit-proof` job against this project (`data_source: orbit-remote`):
+
 ```
-📊 Blast Radius Report — orbit.js
+📊 Blast Radius Report — report.js
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔴 Risk: HIGH (score: 100/100)
-   3 dependents across 1 team. 3 open MRs touch related code.
+Data source: orbit-remote (real graph: yes)
+🔴 Risk: HIGH (score: 87/100)
+   3 dependents across 2 teams. 1 open MR touches related code.
 
 📁 Direct Dependents (files that import this)
-   ├── gitlab.js
-   └── agent.js
+   ├── agent.js                                   (Team: team-unknown)
+   └── tests/report.test.js                       (Team: team-reports)
 
 🔗 Transitive Dependents (files that depend on those)
    └── cli.js (depth: 2, via: agent.js)
 
+👥 Teams to Notify
+   ├── #team-unknown             (2 files affected)
+   └── #team-reports             (1 file affected)
+
 🔀 Open MRs Touching Related Code
-   ├── !4 — "feat: maximize hackathon submission"
-   ├── !7 — "feat: add orbit_get_graph_status tool"
-   └── !9 — "fix: prevent risk-score drift"
+   └── !11 — "feat: Orbit proof, enforcing risk gate, ..." by @unknown
 
 ✅ Suggested Reviewers
    └── @altamish6589 (owners of affected files)
@@ -283,19 +297,34 @@ Use `--format json` to emit this object directly for CI consumption; the default
 
 ## Running in CI
 
-The `.gitlab-ci.yml` `analyze` job runs a real blast-radius analysis on every MR pipeline:
+The `.gitlab-ci.yml` pipeline has three stages — `validate`, `test`, `gate` — and runs on every MR pipeline and on the default branch. No `ANTHROPIC_API_KEY` is needed (deterministic mode); CI auto-provides `CI_API_V4_URL` + `CI_JOB_TOKEN` so Orbit is queried automatically. For the most reliable Orbit access, add a masked `api`-scoped `GITLAB_TOKEN` CI/CD variable.
+
+| Stage | Job | What it does | Blocks? |
+|-------|-----|--------------|---------|
+| validate | `label-guard` | Fails the MR pipeline if the `orbit::hackathon` label is missing (Contribute Track) | ✅ yes |
+| validate | `validate` | `npm ci` + `node cli.js --help` (imports resolve, CLI loads) | ✅ yes |
+| test | `unit-test` | `npm test` (deterministic scoring + parser + MR-comment suites) | ✅ yes |
+| test | `test-mock` | Smoke-tests that every ESM module imports cleanly | ✅ yes |
+| test | `analyze` | Real blast-radius run on `orbit.js` | `allow_failure` |
+| test | `orbit-proof` | `--require-orbit --format json`; uploads `orbit-report.json` as a 30-day artifact — hard proof the real graph answered | `allow_failure` |
+| gate | `risk-gate` | `--fail-on HIGH` on `GITPULSE_TARGET` (default `report.js`); exits non-zero on HIGH | `allow_failure` here* |
+| gate | `mr-report` | Posts/updates the report as an MR note (`--comment`) | `allow_failure` |
 
 ```yaml
-analyze:
+orbit-proof:
   stage: test
   image: node:20-alpine
   script:
     - npm ci
-    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID}
+    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID} --format json --require-orbit | tee orbit-report.json
+  artifacts:
+    paths: [orbit-report.json]
+    when: always
+    expire_in: 30 days
   allow_failure: true
 ```
 
-It needs no `ANTHROPIC_API_KEY` (deterministic mode). With a `GITLAB_TOKEN` CI/CD variable it queries the real Orbit graph (`data_source: "orbit-remote"`); otherwise it falls back to real static analysis. Other jobs: `validate` (CLI loads), `unit-test` (`npm test`), `test-mock` (module imports).
+*`risk-gate` is `allow_failure` **only in this repo**, because GitPulse self-analyzes here and nearly every module overlaps the open MR + many pipelines, so it always scores HIGH. For a consumer project, copy the `risk-gate` job **without** `allow_failure` to make a HIGH-risk change a hard block. The `mr-report` job needs a masked `api`-scoped `GITLAB_TOKEN`; it soft-fails (skips) otherwise.
 
 ---
 
@@ -308,19 +337,25 @@ gitpulse/
 ├── package.json
 ├── .env.example
 ├── .gitlab-ci.yml                   ← validate / unit-test / test-mock / analyze
-├── cli.js                          ← CLI entry point + arg parsing
+├── cli.js                          ← CLI entry point + arg parsing + enforcing gates
 ├── agent.js                        ← Claude loop (optional) + deterministic mode
 ├── orbit.js                        ← Orbit dependency traversal + ownership
 ├── orbit-client.js                 ← Orbit REST client (+ glab fallback)
+├── gitlab-api.js                   ← shared API base-URL + auth headers
 ├── static-analysis.js              ← real import-graph fallback (no Orbit)
 ├── gitlab.js                       ← Open MR + pipeline queries via Orbit
 ├── report.js                       ← Risk scoring + report generation
+├── mr-comment.js                   ← idempotent MR-note rendering + posting
+├── .gitlab/
+│   └── merge_request_templates/
+│       └── Hackathon.md            ← applies orbit::hackathon via /label
 ├── skills/
 │   └── blast-radius/
 │       └── SKILL.md                ← Duo Agent Platform skill definition
 └── tests/
     ├── report.test.js              ← Scoring engine + guardrail tests
-    └── orbit-parse.test.js         ← Orbit response-parsing tests
+    ├── orbit-parse.test.js         ← Orbit response-parsing tests
+    └── mr-comment.test.js          ← Markdown render + create/update tests
 ```
 
 ---
@@ -337,18 +372,22 @@ Coverage includes:
 
 - **`tests/report.test.js`** — the scoring formula, the score cap at 100, MEDIUM/HIGH band boundaries, the `team-unknown` exclusion, the 3+ teams → HIGH guardrail, the open-MR-overlap → not-safe guardrail, ownership enrichment, and reviewer suggestion.
 - **`tests/orbit-parse.test.js`** — normalization of Orbit's graph, tabular, and alias-prefixed response shapes, and clean module imports.
+- **`tests/mr-comment.test.js`** — markdown rendering, hidden-marker presence, the mock-data banner, the create-vs-update decision, and a clean skip when no token is configured.
 
 ---
 
 ## Publishing to AI Catalog
 
-This project is structured as a GitLab Duo Agent Platform skill. To publish:
+This project is structured as a GitLab Duo Agent Platform skill. To publish (Maintainer/Owner role required):
 
-1. Push to GitLab.com as a public project.
-2. Navigate to **Automate > Agents** in the project sidebar.
-3. Create a new agent using the `skills/blast-radius/SKILL.md` skill.
-4. Set visibility to **Public**.
-5. The agent appears in **Explore > AI Catalog** for others to enable.
+1. Push to GitLab.com as a public project (done).
+2. In the left sidebar, select **AI > Agents**, then **New agent**.
+3. Under **Basic information**, set a **Display name** (`GitPulse Blast Radius Analyzer`) and **Description**.
+4. Under **Visibility & access**, set **Visibility** to **Public**.
+5. Under **Prompts > System prompt**, paste the system prompt from `agent.js` (workflow steps + hard rules), and select any **Available tools** the agent may use.
+6. Select **Create agent**. It then appears under **Explore > AI Catalog** for others to enable.
+
+> On GitLab.com use a standard **custom agent** (above) or a **custom flow** (**AI > Flows**) — creating custom *external* agents is not available on GitLab.com. The `skills/blast-radius/SKILL.md` and `AGENTS.md` files document the behavior to mirror in the agent's system prompt.
 
 ---
 
