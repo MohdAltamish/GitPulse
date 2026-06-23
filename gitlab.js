@@ -184,14 +184,42 @@ async function queryOrbitPipelines(files) {
 
 function extractRows(result) {
   if (!result) return [];
-  if (Array.isArray(result.rows)) return result.rows;
-  if (result.data && Array.isArray(result.data.rows)) return result.data.rows;
-  if (result.data && Array.isArray(result.data)) return result.data;
   if (typeof result === "string") {
     try { return extractRows(JSON.parse(result)); } catch { return []; }
   }
+  // Graph-shaped response from `glab orbit remote query --format raw`.
+  if (result.result && Array.isArray(result.result.nodes)) {
+    return result.result.nodes.map(flattenNode);
+  }
+  if (Array.isArray(result.nodes)) return result.nodes.map(flattenNode);
+  // Tabular shapes.
+  if (Array.isArray(result.rows)) return result.rows.map(flattenNode);
+  if (result.data && Array.isArray(result.data.rows)) return result.data.rows.map(flattenNode);
+  if (result.data && Array.isArray(result.data)) return result.data.map(flattenNode);
   if (result.response) return extractRows(result.response);
   return [];
+}
+
+/**
+ * Flatten an Orbit node/row into a plain property map, exposing both the
+ * original (possibly alias-prefixed) key and the bare property name.
+ */
+function flattenNode(node) {
+  if (!node || typeof node !== "object") return {};
+  const out = {};
+  const props = node.properties && typeof node.properties === "object"
+    ? { ...node, ...node.properties }
+    : node;
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "properties") continue;
+    out[key] = value;
+    const underscore = key.indexOf("_");
+    if (underscore > 0) {
+      const bare = key.slice(underscore + 1);
+      if (!(bare in out)) out[bare] = value;
+    }
+  }
+  return out;
 }
 
 function inferPipelineFromPath(file) {

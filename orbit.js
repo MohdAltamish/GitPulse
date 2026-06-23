@@ -242,30 +242,72 @@ async function queryOrbitOwners(files) {
 
 /**
  * Extract row data from Orbit's response format.
- * Orbit returns data in various shapes depending on the query type.
+ *
+ * `glab orbit remote query --format raw` returns a graph-shaped response:
+ *   { result: { nodes: [ { id, type, <properties...> }, ... ], edges: [...] } }
+ * (see .agents/skills/orbit/references/query_language.md). Older/alternate
+ * shapes use { rows: [...] }. We normalize all of them to a flat array of
+ * property objects, flattening any alias-prefixed columns (e.g. imp_file_path
+ * -> file_path) so callers can read bare property names.
  */
 function extractRows(result) {
   if (!result) return [];
 
-  // Orbit raw format: { rows: [...] } or { data: { rows: [...] } }
-  if (Array.isArray(result.rows)) return result.rows;
-  if (result.data && Array.isArray(result.data.rows)) return result.data.rows;
-  if (result.data && Array.isArray(result.data)) return result.data;
-
-  // LLM format may be a string — try to parse it
+  // LLM/string format — try to parse it first.
   if (typeof result === "string") {
     try {
-      const parsed = JSON.parse(result);
-      return extractRows(parsed);
+      return extractRows(JSON.parse(result));
     } catch {
       return [];
     }
   }
 
-  // Try nested response structures
+  // Graph shape: { result: { nodes: [...] } }
+  if (result.result && Array.isArray(result.result.nodes)) {
+    return result.result.nodes.map(flattenNode);
+  }
+  // Graph shape without the `result` envelope.
+  if (Array.isArray(result.nodes)) {
+    return result.nodes.map(flattenNode);
+  }
+
+  // Tabular shapes: { rows: [...] } / { data: { rows: [...] } } / { data: [...] }
+  if (Array.isArray(result.rows)) return result.rows.map(flattenNode);
+  if (result.data && Array.isArray(result.data.rows)) return result.data.rows.map(flattenNode);
+  if (result.data && Array.isArray(result.data)) return result.data.map(flattenNode);
+
+  // Nested response envelope.
   if (result.response) return extractRows(result.response);
 
   return [];
+}
+
+/**
+ * Flatten an Orbit node/row into a plain property map.
+ *
+ * Orbit may return alias-prefixed column names (e.g. `imp_file_path`,
+ * `mr_iid`) when multiple nodes are present, alongside bare names. We expose
+ * both: the bare property and the original key, so lookups like
+ * `row.file_path` work regardless of which the server emitted.
+ */
+function flattenNode(node) {
+  if (!node || typeof node !== "object") return {};
+  const out = {};
+  // Some raw responses nest values under a `properties` object.
+  const props = node.properties && typeof node.properties === "object"
+    ? { ...node, ...node.properties }
+    : node;
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "properties") continue;
+    out[key] = value;
+    // Strip a leading alias segment: `imp_file_path` -> `file_path`.
+    const underscore = key.indexOf("_");
+    if (underscore > 0) {
+      const bare = key.slice(underscore + 1);
+      if (!(bare in out)) out[bare] = value;
+    }
+  }
+  return out;
 }
 
 // ─── Mock Data Fallback ─────────────────────────────────────────
