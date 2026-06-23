@@ -31,6 +31,13 @@ Use this skill when:
 - CI/CD gate requires blast radius approval above a risk threshold
 - Onboarding to a new codebase and assessing how interconnected a file is
 
+## Trigger Phrases
+- "what breaks if I change X"
+- "blast radius of <file>"
+- "analyze impact of this file"
+- "is it safe to change X"
+- "/gitpulse analyze <file>"
+
 ## Inputs
 
 | Field | Type | Required | Description |
@@ -60,7 +67,13 @@ Returns a `BlastRadiusReport` object:
 
 ## How It Works
 
-The skill uses GitLab Orbit's knowledge graph via `glab orbit remote query` to:
+The skill uses GitLab Orbit's knowledge graph via native Orbit tools:
+- Use `Orbit: Query Graph` for dependency traversal
+- Use `Orbit: Get Graph Status` to verify indexing
+- Use `Orbit: Get Graph Schema` to discover entity types
+- Use `Orbit: Invoke Command` for blast radius commands
+
+It then:
 
 ### 1. Dependency Traversal
 Query the `ImportedSymbol` entity to find all files that import the target:
@@ -169,3 +182,8 @@ node cli.js --file utils/tax.js --format json --project-id 12345
 - **CI/CD Gate**: Fail pipeline if `risk === 'HIGH'` and no reviewer approval
 - **Slack Notification**: Ping affected team channels when blast radius is detected
 - **Duo Chat**: Invoke via `/gitpulse analyze <file>`
+
+## Project
+- GitLab: https://gitlab.com/gitlab-ai-hackathon/transcend/35602696
+- Built for: GitLab Transcend Hackathon 2026
+- License: MIT
