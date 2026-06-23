@@ -1,20 +1,30 @@
 /**
  * GitPulse Agent — Blast Radius Analyzer
- * Uses Claude (claude-sonnet-4-6) to reason about dependency graphs
- * and produce structured blast radius reports.
+ * Uses Claude (claude-sonnet-4-6) to orchestrate Orbit knowledge-graph
+ * queries, then runs the deterministic scoring engine in report.js to
+ * produce the structured blast radius report.
+ *
+ * The model decides WHICH files/symbols to investigate and drives the
+ * tool calls; the final risk score, guardrails, and report shape are
+ * computed deterministically by report.js so the SKILL.md formula and
+ * AGENTS.md guardrails always execute the same way.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { orbitQueryDependents, orbitGetOwners } from "./orbit.js";
 import { gitlabGetOpenMRs, gitlabGetPipelines } from "./gitlab.js";
-import { buildReport, calculateRiskScore } from "./report.js";
+import {
+  buildReport,
+  calculateRiskScore,
+  formatReportForCLI,
+} from "./report.js";
 
 const client = new Anthropic();
 
 const SYSTEM_PROMPT = `You are GitPulse, a blast radius analyzer for GitLab repositories.
 
 Your job is to help developers understand the full impact of a code change before they merge.
-Given a target file or function, you will analyze the dependency graph and produce a structured report.
+Given a target file or function, you will analyze the dependency graph by calling the tools provided.
 
 You have access to these tools:
 - orbit_query_dependents: Find all files that import/depend on the target
@@ -22,14 +32,17 @@ You have access to these tools:
 - gitlab_get_open_mrs: Find open MRs touching related files
 - gitlab_get_pipelines: Identify CI/CD pipelines at risk
 
-Always:
-1. Traverse at least depth=2 (direct + transitive dependents)
-2. Map every discovered file to an owner (mark unknown if not found)
-3. Check for overlapping open MRs
-4. Calculate a risk score and justify it
-5. Suggest specific reviewers from the affected team owners
+Your required workflow:
+1. Call orbit_query_dependents with depth >= 2 (direct + transitive dependents).
+2. Collect the full list of affected files (direct + transitive) and call
+   orbit_get_owners on ALL of them.
+3. Call gitlab_get_open_mrs with the affected files and the project id.
+4. Call gitlab_get_pipelines with the affected files.
 
-Be precise and complete. A missed dependency could cause a production incident.`;
+Do NOT compute the risk score or write the final report yourself. Once you have
+called all four tools, respond with a single short sentence confirming the
+analysis is complete. GitPulse computes the risk score and renders the report
+deterministically from the tool results.`;
 
 const TOOLS = [
   {
@@ -110,28 +123,46 @@ const TOOLS = [
 ];
 
 /**
- * Execute a tool call from the agent
+ * Execute a tool call from the agent.
+ *
+ * `collected` accumulates the latest result from each tool so the
+ * deterministic report engine can run after the agent loop finishes.
  */
-async function executeTool(toolName, toolInput, projectId) {
+async function executeTool(toolName, toolInput, projectId, collected) {
   switch (toolName) {
-    case "orbit_query_dependents":
-      return await orbitQueryDependents(
+    case "orbit_query_dependents": {
+      const graph = await orbitQueryDependents(
         toolInput.file,
         toolInput.symbol,
         toolInput.depth || 3
       );
+      collected.graph = graph;
+      return graph;
+    }
 
-    case "orbit_get_owners":
-      return await orbitGetOwners(toolInput.files);
+    case "orbit_get_owners": {
+      const owners = await orbitGetOwners(toolInput.files);
+      // Merge so ownership discovered across multiple calls is retained.
+      const byFile = new Map(collected.owners.map((o) => [o.file, o]));
+      for (const o of owners) byFile.set(o.file, o);
+      collected.owners = Array.from(byFile.values());
+      return owners;
+    }
 
-    case "gitlab_get_open_mrs":
-      return await gitlabGetOpenMRs(
+    case "gitlab_get_open_mrs": {
+      const mrs = await gitlabGetOpenMRs(
         toolInput.files,
         toolInput.project_id || projectId
       );
+      collected.mrs = mrs;
+      return mrs;
+    }
 
-    case "gitlab_get_pipelines":
-      return await gitlabGetPipelines(toolInput.files);
+    case "gitlab_get_pipelines": {
+      const pipelines = await gitlabGetPipelines(toolInput.files);
+      collected.pipelines = pipelines;
+      return pipelines;
+    }
 
     default:
       throw new Error(`Unknown tool: ${toolName}`);
@@ -139,7 +170,10 @@ async function executeTool(toolName, toolInput, projectId) {
 }
 
 /**
- * Main agent loop — runs until the model produces a final report
+ * Main agent loop — runs the model to drive tool calls, then computes the
+ * report deterministically from the collected tool results.
+ *
+ * @returns {Promise<{ report: string, reportObject: object, messages: object[] }>}
  */
 export async function runBlastRadiusAgent(file, symbol, projectId) {
   const userMessage = symbol
@@ -150,6 +184,14 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
 
   console.log(`\n🔍 GitPulse analyzing: ${file}${symbol ? `::${symbol}` : ""}`);
   console.log("━".repeat(60));
+
+  // Accumulates the latest result from each tool across the loop.
+  const collected = {
+    graph: null,
+    owners: [],
+    mrs: [],
+    pipelines: [],
+  };
 
   let response;
   let iteration = 0;
@@ -184,7 +226,12 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
         console.log(`  → Calling ${block.name}...`);
 
         try {
-          const result = await executeTool(block.name, block.input, projectId);
+          const result = await executeTool(
+            block.name,
+            block.input,
+            projectId,
+            collected
+          );
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -204,11 +251,43 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
     }
   }
 
-  // Extract final text response
-  const finalText = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
+  // ── Deterministic report generation ───────────────────────────
+  // Run the scoring engine from report.js so the SKILL.md formula and
+  // AGENTS.md guardrails always execute, regardless of what the model said.
+  const graph = collected.graph || { direct: [], transitive: [] };
 
-  return { report: finalText, messages };
+  // Guardrail: ensure every discovered file has an ownership entry. If the
+  // model never looked up owners (or missed some), resolve them now so files
+  // are never silently dropped from the report.
+  const allFiles = [
+    ...(graph.direct || []).map((d) => d.file),
+    ...(graph.transitive || []).map((d) => d.file),
+  ];
+  const ownedFiles = new Set(collected.owners.map((o) => o.file));
+  const missingFiles = allFiles.filter((f) => !ownedFiles.has(f));
+  if (missingFiles.length > 0) {
+    const extraOwners = await orbitGetOwners(missingFiles);
+    collected.owners = [...collected.owners, ...extraOwners];
+  }
+
+  const score = calculateRiskScore(
+    graph,
+    collected.owners,
+    collected.mrs,
+    collected.pipelines
+  );
+
+  const reportObject = buildReport({
+    file,
+    symbol: symbol || null,
+    graph,
+    owners: collected.owners,
+    mrs: collected.mrs,
+    pipelines: collected.pipelines,
+    score,
+  });
+
+  const report = formatReportForCLI(reportObject);
+
+  return { report, reportObject, messages };
 }

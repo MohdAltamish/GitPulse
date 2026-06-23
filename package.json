@@ -9,7 +9,8 @@
   },
   "scripts": {
     "analyze": "node cli.js",
-    "start": "node cli.js"
+    "start": "node cli.js",
+    "test": "node --test"
   },
   "keywords": [
     "gitlab",
