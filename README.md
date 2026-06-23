@@ -337,19 +337,25 @@ gitpulse/
 ├── package.json
 ├── .env.example
 ├── .gitlab-ci.yml                   ← validate / unit-test / test-mock / analyze
-├── cli.js                          ← CLI entry point + arg parsing
+├── cli.js                          ← CLI entry point + arg parsing + enforcing gates
 ├── agent.js                        ← Claude loop (optional) + deterministic mode
 ├── orbit.js                        ← Orbit dependency traversal + ownership
 ├── orbit-client.js                 ← Orbit REST client (+ glab fallback)
+├── gitlab-api.js                   ← shared API base-URL + auth headers
 ├── static-analysis.js              ← real import-graph fallback (no Orbit)
 ├── gitlab.js                       ← Open MR + pipeline queries via Orbit
 ├── report.js                       ← Risk scoring + report generation
+├── mr-comment.js                   ← idempotent MR-note rendering + posting
+├── .gitlab/
+│   └── merge_request_templates/
+│       └── Hackathon.md            ← applies orbit::hackathon via /label
 ├── skills/
 │   └── blast-radius/
 │       └── SKILL.md                ← Duo Agent Platform skill definition
 └── tests/
     ├── report.test.js              ← Scoring engine + guardrail tests
-    └── orbit-parse.test.js         ← Orbit response-parsing tests
+    ├── orbit-parse.test.js         ← Orbit response-parsing tests
+    └── mr-comment.test.js          ← Markdown render + create/update tests
 ```
 
 ---
@@ -366,18 +372,22 @@ Coverage includes:
 
 - **`tests/report.test.js`** — the scoring formula, the score cap at 100, MEDIUM/HIGH band boundaries, the `team-unknown` exclusion, the 3+ teams → HIGH guardrail, the open-MR-overlap → not-safe guardrail, ownership enrichment, and reviewer suggestion.
 - **`tests/orbit-parse.test.js`** — normalization of Orbit's graph, tabular, and alias-prefixed response shapes, and clean module imports.
+- **`tests/mr-comment.test.js`** — markdown rendering, hidden-marker presence, the mock-data banner, the create-vs-update decision, and a clean skip when no token is configured.
 
 ---
 
 ## Publishing to AI Catalog
 
-This project is structured as a GitLab Duo Agent Platform skill. To publish:
+This project is structured as a GitLab Duo Agent Platform skill. To publish (Maintainer/Owner role required):
 
-1. Push to GitLab.com as a public project.
-2. Navigate to **Automate > Agents** in the project sidebar.
-3. Create a new agent using the `skills/blast-radius/SKILL.md` skill.
-4. Set visibility to **Public**.
-5. The agent appears in **Explore > AI Catalog** for others to enable.
+1. Push to GitLab.com as a public project (done).
+2. In the left sidebar, select **AI > Agents**, then **New agent**.
+3. Under **Basic information**, set a **Display name** (`GitPulse Blast Radius Analyzer`) and **Description**.
+4. Under **Visibility & access**, set **Visibility** to **Public**.
+5. Under **Prompts > System prompt**, paste the system prompt from `agent.js` (workflow steps + hard rules), and select any **Available tools** the agent may use.
+6. Select **Create agent**. It then appears under **Explore > AI Catalog** for others to enable.
+
+> On GitLab.com use a standard **custom agent** (above) or a **custom flow** (**AI > Flows**) — creating custom *external* agents is not available on GitLab.com. The `skills/blast-radius/SKILL.md` and `AGENTS.md` files document the behavior to mirror in the agent's system prompt.
 
 ---
 
