@@ -43,16 +43,16 @@ test-mock:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# Full integration test (requires ANTHROPIC_API_KEY in CI/CD variables)
-test-integration:
+# Real blast-radius analysis. Runs the deterministic (keyless) pipeline by
+# default; if ANTHROPIC_API_KEY is set in CI/CD variables the agent will use
+# the LLM-driven loop instead. Targets a real file in THIS project.
+analyze:
   stage: test
   image: node:${NODE_VERSION}-alpine
   script:
     - npm ci
-    - node cli.js --file utils/tax.js --function calculateTax --project-id ${GITLAB_PROJECT_ID:-12345}
+    - node cli.js --file orbit.js --project-id ${GITLAB_PROJECT_ID:-$CI_PROJECT_ID}
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: manual
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   allow_failure: true
-  variables:
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
