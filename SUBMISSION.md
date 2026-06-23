@@ -10,7 +10,8 @@ remaining human steps (record video, publish to AI Catalog, submit on Devpost).
 
 | # | Requirement | Status | Owner action |
 |---|-------------|--------|--------------|
-| 1 | Working agent/skill on the Duo Agent Platform that meaningfully uses Orbit | ✅ Built (`AGENTS.md`, `skills/blast-radius/SKILL.md`, real `glab orbit remote query` calls) | — |
+| 0 | **Real Orbit graph proof** | ✅ CI `orbit-proof` job emits `orbit-report.json` with `data_source: "orbit-remote"`; verified in pipeline log (`[Orbit] ✓ Real graph data returned`, `Data source: orbit-remote (real graph: yes)`) | — |
+| 1 | Working agent/skill on the Duo Agent Platform that meaningfully uses Orbit | ✅ Built (`AGENTS.md`, `skills/blast-radius/SKILL.md`); real Orbit REST traversal (`POST /api/v4/orbit/query`) confirmed in CI | — |
 | 2 | Performs a specific action/workflow (not just chat) | ✅ Blast-radius workflow: traverse → own → correlate → score → report | — |
 | 3 | Public, MIT-licensed GitLab project | ✅ `LICENSE` (MIT), public project | — |
 | 4 | At least one agent/flow published to the **AI Catalog** | ⚠️ **PENDING** | Publish (see §3) |
@@ -57,6 +58,31 @@ this break?" from tribal knowledge into a query.
 - Depth-aware scoring weighting and historical incident correlation.
 
 ---
+
+## 2b. Proof of real Orbit data & enforcing behavior
+
+GitPulse no longer just prints a report — it proves provenance and enforces gates:
+
+- **Proof artifact**: the CI `orbit-proof` job runs
+  `node cli.js --file orbit.js --require-orbit --format json` and uploads
+  `orbit-report.json`. `--require-orbit` makes the job fail unless
+  `data_source === "orbit-remote"`, so a passing job is hard proof the real
+  Orbit knowledge graph answered. Verified run on MR !11:
+  `Data source: orbit-remote (real graph: yes)` — `Risk: HIGH (score: 77/100)`.
+- **Enforcing risk gate**: the `risk-gate` job runs `--fail-on HIGH` with no
+  `allow_failure`, so a HIGH-risk change blocks the pipeline. Target file is
+  configurable via the `GITPULSE_TARGET` CI/CD variable.
+- **MR comment**: the `mr-report` job posts the report as an idempotent MR note
+  (`--comment`), updating in place via a hidden marker. Needs a masked
+  `api`-scoped `GITLAB_TOKEN` CI/CD variable.
+
+## 2c. Contribute Track
+
+- All qualifying MRs must carry the **`orbit::hackathon`** label and be merged
+  before **June 24, 2026, 2:00 pm ET** (max 5 MRs per person).
+- The `label-guard` CI job fails any MR pipeline missing the label, and
+  `.gitlab/merge_request_templates/Hackathon.md` applies it automatically via
+  a `/label` quick action.
 
 ## 3. Publish to the AI Catalog (required)
 
