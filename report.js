@@ -49,7 +49,8 @@ export function calculateRiskScore(graph, owners, mrs, pipelines) {
     mrOverlaps * 15 +
     pipelineCount * 5;
 
-  // Determine risk level
+  // Determine risk level from the score band (SKILL.md):
+  //   LOW: < 30   MEDIUM: 30–60   HIGH: > 60
   let level;
   if (score > 60) {
     level = "HIGH";
@@ -59,17 +60,9 @@ export function calculateRiskScore(graph, owners, mrs, pipelines) {
     level = "LOW";
   }
 
-  // Guardrail: 3+ teams always escalates to HIGH (AGENTS.md)
+  // Guardrail (AGENTS.md): 3+ teams always escalates to HIGH regardless of score.
   if (teamsCount >= 3) {
     level = "HIGH";
-  }
-
-  // Guardrail: active MR overlap also pushes to HIGH (AGENTS.md)
-  if (mrOverlaps > 0 && level !== "HIGH") {
-    // 11+ dependents OR 3+ teams OR active MR overlap → HIGH
-    if (directCount + transitiveCount >= 11) {
-      level = "HIGH";
-    }
   }
 
   return {
