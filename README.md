@@ -4,7 +4,7 @@
 
 GitPulse is an AI-powered agent built on the **GitLab Duo Agent Platform** that uses **GitLab Orbit's knowledge graph** to trace every dependent of a file or function you're about to change. It produces an instant **Blast Radius Report** complete with a risk score, affected teams, overlapping open MRs, at-risk pipelines, and suggested reviewers.
 
-Built for the **GitLab Transcend Hackathon 2025** (Showcase Track).
+Built for the **GitLab Transcend Hackathon 2026** (Showcase Track).
 
 ---
 
