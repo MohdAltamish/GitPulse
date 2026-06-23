@@ -349,7 +349,7 @@ This project is structured as a GitLab Duo Agent Platform skill. To publish:
 
 ## Hackathon
 
-Built for **GitLab Transcend Hackathon 2025** — Showcase Track.
+Built for **GitLab Transcend Hackathon 2026** — Showcase Track.
 
 **Developer pain point**: developers change shared code without knowing what depends on it, causing unexpected breakage in production.
 
