@@ -91,7 +91,16 @@ export function calculateRiskScore(graph, owners, mrs, pipelines) {
  * @param {{ score: number, level: string, breakdown: object }} params.score - Risk score result
  * @returns {object} Structured blast radius report
  */
-export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score }) {
+export function buildReport({
+  file,
+  symbol,
+  graph,
+  owners,
+  mrs,
+  pipelines,
+  score,
+  breakingChanges = [],
+}) {
   // Build ownership lookup map
   const ownerMap = new Map();
   for (const o of owners) {
@@ -135,10 +144,24 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
     entry.files.push(dep.file);
   }
 
+  // Resolve the ownership_basis for a team from the owner records of its files.
+  // SKILL.md promises this label: "mr-authorship" | "inferred-from-path" | "unknown".
+  function teamOwnershipBasis(files) {
+    const bases = new Set();
+    for (const f of files) {
+      const o = ownerMap.get(f);
+      bases.add((o && o.ownership_basis) || "unknown");
+    }
+    if (bases.has("mr-authorship")) return "mr-authorship";
+    if (bases.has("inferred-from-path")) return "inferred-from-path";
+    return "unknown";
+  }
+
   const teamsAffected = Array.from(teamAggregation.values()).map((t) => ({
     name: t.name,
     files_count: t.files_count,
     slack: `#${t.name}`,
+    ownership_basis: teamOwnershipBasis(t.files),
   }));
 
   // Format open MRs
@@ -170,10 +193,20 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
   const isRealData =
     dataSource === "orbit-remote" || dataSource === "static-analysis";
 
+  // A conflicted overlapping MR is also a hard block.
+  const hasConflictedOverlap = openMRs.some((mr) => mr.has_conflicts === true);
+
+  // Breaking changes are an additional safety block but never alter the score.
+  const breaking = Array.isArray(breakingChanges) ? breakingChanges : [];
+
   // Safe to merge? (AGENTS.md guardrail: never true if overlapping open MRs).
-  // Never certify a merge from mock/unknown data either.
+  // Never certify a merge from mock/unknown data, conflicts, or breaking changes.
   const safeToMerge =
-    isRealData && openMRs.length === 0 && score.level !== "HIGH";
+    isRealData &&
+    openMRs.length === 0 &&
+    score.level !== "HIGH" &&
+    !hasConflictedOverlap &&
+    breaking.length === 0;
 
   const totalDependents = directDeps.length + transitiveDeps.length;
   const teamCount = teamsAffected.filter((t) => t.name !== "unknown").length;
@@ -202,6 +235,7 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
     open_mrs: openMRs,
     pipelines_at_risk: pipelinesAtRisk,
     suggested_reviewers: suggestedReviewers,
+    breaking_changes: breaking,
     safe_to_merge: safeToMerge,
     score_breakdown: score.breakdown,
     data_source: dataSource,
@@ -272,6 +306,19 @@ export function formatReportForCLI(report) {
     lines.push("");
   }
 
+  // Breaking changes (between dependents and teams). Low-confidence findings
+  // are explicitly labeled so the report never overstates a heuristic guess.
+  const breaking = report.breaking_changes || [];
+  if (breaking.length > 0) {
+    lines.push("⚠️  Breaking Changes Detected");
+    breaking.forEach((bc, i) => {
+      const connector = i === breaking.length - 1 ? "└──" : "├──";
+      const tag = bc.confidence === "low" ? " [low confidence]" : "";
+      lines.push(`   ${connector} ${bc.detail}${tag}`);
+    });
+    lines.push("");
+  }
+
   // Teams affected
   if (report.teams_affected.length > 0) {
     lines.push("👥 Teams to Notify");
@@ -311,6 +358,27 @@ export function formatReportForCLI(report) {
     lines.push(
       `   └── ${report.suggested_reviewers.join(", ")} (owners of affected files)`
     );
+    lines.push("");
+  }
+
+  // Score breakdown — re-render the stored counts with the documented SKILL.md
+  // weights. This is display only; it reads score_breakdown and never recomputes
+  // the authoritative score, so it cannot drift from calculateRiskScore.
+  const bd = report.score_breakdown;
+  if (bd) {
+    lines.push("📐 Score Breakdown");
+    const rows = [
+      [bd.direct_dependents * 5, `direct dependents (${bd.direct_dependents} × 5)`],
+      [bd.transitive_dependents * 2, `transitive dependents (${bd.transitive_dependents} × 2)`],
+      [bd.teams_affected * 10, `teams affected (${bd.teams_affected} × 10)`],
+      [bd.open_mr_overlaps * 15, `open MR overlaps (${bd.open_mr_overlaps} × 15)`],
+      [bd.pipelines_at_risk * 5, `pipelines at risk (${bd.pipelines_at_risk} × 5)`],
+    ];
+    for (const [pts, label] of rows) {
+      lines.push(`   ${pts >= 0 ? "+" : ""}${String(pts).padStart(3)}  ${label}`);
+    }
+    lines.push("   ────");
+    lines.push(`   = ${report.risk_score}/100 ${report.risk}`);
     lines.push("");
   }
 
