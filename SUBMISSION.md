@@ -52,10 +52,22 @@ this break?" from tribal knowledge into a query.
 - **Node.js / ESM**, graceful mock fallback when Orbit is unavailable, CI with
   unit + smoke tests.
 
+### What's also in the box
+- **Breaking-change detection** (`diff-analyzer.js`): flags removed exports
+  (high confidence), removed/renamed functions (medium), and return-shape
+  hints (low). Findings are confidence-labeled — GitPulse never passes a regex
+  guess off as a certainty — and a non-empty list forces `safe_to_merge: false`.
+- **Visible score math**: the CLI prints a Score Breakdown
+  (`+15 direct (3 × 5)` …) rendered straight from the stored
+  `score_breakdown`, so the deterministic scoring is provable at a glance and
+  cannot drift from `calculateRiskScore`.
+- **Merge-conflict signal**: open MRs are annotated with `has_conflicts` /
+  `merge_status`; a conflicted overlapping MR also blocks `safe_to_merge`.
+
 ### What's next
-- Post the report directly as an MR comment via a CI gate.
 - Slack/Teams notification to affected team channels.
 - Depth-aware scoring weighting and historical incident correlation.
+- AST-based breaking-change detection to replace the regex heuristics.
 
 ---
 
@@ -135,7 +147,7 @@ Upload to YouTube/Vimeo, set **Public**, no copyrighted music.
 
 | Criterion | How GitPulse scores |
 |-----------|---------------------|
-| **Technological Implementation** | Real Orbit graph traversal via typed `glab orbit remote query`; deterministic, unit-tested scoring engine; green CI (validate + unit-test + mock smoke). |
+| **Technological Implementation** | Real Orbit graph traversal over `POST /api/v4/orbit/query`; deterministic, unit-tested scoring engine (4 test suites under `tests/`: report, mr-comment, orbit-parse, diff-analyzer); confidence-labeled breaking-change detection; green CI (validate + unit-test + orbit-proof). |
 | **Design and Usability** | Single-command CLI, `--json` for CI, emoji-structured report, `.env.example`, graceful fallback with a clear warning. |
 | **Potential Impact** | Prevents cross-team production breakage — a universal SDLC pain point; replicable for any Orbit-indexed repo. |
 | **Quality of the idea** | Turns "blast radius" from tribal knowledge into a graph query; combines dependency + ownership + in-flight MR + pipeline context in one report. |
