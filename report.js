@@ -100,6 +100,7 @@ export function buildReport({
   pipelines,
   score,
   breakingChanges = [],
+  graphStatus = null,
 }) {
   // Build ownership lookup map
   const ownerMap = new Map();
@@ -236,6 +237,7 @@ export function buildReport({
     pipelines_at_risk: pipelinesAtRisk,
     suggested_reviewers: suggestedReviewers,
     breaking_changes: breaking,
+    graph_status: graphStatus,
     safe_to_merge: safeToMerge,
     score_breakdown: score.breakdown,
     data_source: dataSource,
