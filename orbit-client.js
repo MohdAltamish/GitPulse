@@ -137,6 +137,48 @@ async function queryOrbitViaCli(queryBody) {
 }
 
 /**
+ * Get the GitLab Orbit knowledge-graph readiness status.
+ *
+ * Rather than shelling out to `glab orbit remote status` (which isn't present
+ * in CI), this issues the same minimal REST probe used by isOrbitAvailable and
+ * reports whether the graph actually answered, plus which transport served it.
+ * This keeps the status check consistent with how the analyzer really queries.
+ *
+ * @param {object} [options]
+ * @param {string} [options.namespace] - Optional namespace/full path, echoed back
+ *   in the result for context (the REST probe is project-scoped by token).
+ * @returns {Promise<object>} Structured status (never throws).
+ */
+export async function getGraphStatus(options = {}) {
+  const { namespace } = options;
+  const headers = authHeaders();
+  if (!headers) {
+    return {
+      ready: false,
+      reason: "no GITLAB_TOKEN/CI_JOB_TOKEN for Orbit REST",
+      namespace: namespace || null,
+      transport: null,
+      source: "mock",
+    };
+  }
+
+  const probe = {
+    query_type: "traversal",
+    node: { id: "p", entity: "Pipeline" },
+    limit: 1,
+  };
+  const result = await queryOrbit(probe);
+  const ready = result !== null;
+  return {
+    ready,
+    reason: ready ? "graph answered REST probe" : "graph did not answer",
+    namespace: namespace || null,
+    transport: ready ? lastTransport : null,
+    source: ready ? "orbit-remote" : "mock",
+  };
+}
+
+/**
  * Check if Orbit is reachable (REST token present, or glab status succeeds).
  * @returns {Promise<boolean>}
  */

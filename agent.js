@@ -11,7 +11,11 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { orbitQueryDependents, orbitGetOwners } from "./orbit.js";
+import {
+  orbitQueryDependents,
+  orbitGetOwners,
+  orbitGetGraphStatus,
+} from "./orbit.js";
 import { gitlabGetOpenMRs, gitlabGetPipelines } from "./gitlab.js";
 import {
   buildReport,
@@ -62,6 +66,22 @@ HARD RULES (never violate):
 - If you summarize, quote the report's numbers verbatim; do not derive new ones.`;
 
 const TOOLS = [
+  {
+    name: "orbit_get_graph_status",
+    description:
+      "Check GitLab Orbit knowledge-graph readiness before running traversals. Issues a minimal REST probe and returns whether the graph answered, the transport used, and a reason. Optional namespace is echoed for context.",
+    input_schema: {
+      type: "object",
+      properties: {
+        namespace: {
+          type: "string",
+          description:
+            "Optional top-level group / full path for context (e.g. group/subgroup)",
+        },
+      },
+      required: [],
+    },
+  },
   {
     name: "orbit_query_dependents",
     description:
@@ -147,6 +167,12 @@ const TOOLS = [
  */
 async function executeTool(toolName, toolInput, projectId, collected) {
   switch (toolName) {
+    case "orbit_get_graph_status": {
+      const status = await orbitGetGraphStatus(toolInput.namespace || null);
+      collected.graphStatus = status;
+      return status;
+    }
+
     case "orbit_query_dependents": {
       const graph = await orbitQueryDependents(
         toolInput.file,
@@ -204,6 +230,7 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
 
   // Accumulates the latest result from each tool across the loop.
   const collected = {
+    graphStatus: null,
     graph: null,
     owners: [],
     mrs: [],
@@ -218,6 +245,7 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
     // it. Run the four tools directly in the SKILL.md order so GitPulse works
     // fully offline / keyless. The scoring + report engine below is shared.
     console.log("  ℹ️  No ANTHROPIC_API_KEY — running deterministic analysis (no LLM).");
+    await executeTool("orbit_get_graph_status", {}, projectId, collected);
     await executeTool("orbit_query_dependents", { file, symbol, depth: 3 }, projectId, collected);
     const discovered = [
       ...(collected.graph?.direct || []).map((d) => d.file),
@@ -322,6 +350,7 @@ export async function runBlastRadiusAgent(file, symbol, projectId) {
     mrs: collected.mrs,
     pipelines: collected.pipelines,
     score,
+    graphStatus: collected.graphStatus,
   });
 
   const report = formatReportForCLI(reportObject);

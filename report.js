@@ -91,7 +91,7 @@ export function calculateRiskScore(graph, owners, mrs, pipelines) {
  * @param {{ score: number, level: string, breakdown: object }} params.score - Risk score result
  * @returns {object} Structured blast radius report
  */
-export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score }) {
+export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score, graphStatus = null }) {
   // Build ownership lookup map
   const ownerMap = new Map();
   for (const o of owners) {
@@ -202,6 +202,7 @@ export function buildReport({ file, symbol, graph, owners, mrs, pipelines, score
     open_mrs: openMRs,
     pipelines_at_risk: pipelinesAtRisk,
     suggested_reviewers: suggestedReviewers,
+    graph_status: graphStatus,
     safe_to_merge: safeToMerge,
     score_breakdown: score.breakdown,
     data_source: dataSource,
