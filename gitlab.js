@@ -11,6 +11,53 @@
  */
 
 import { queryOrbit } from "./orbit-client.js";
+import { apiBaseUrl, authHeaders } from "./gitlab-api.js";
+
+/**
+ * Fetch the merge-conflict status for a single MR via the GitLab REST API.
+ * Best-effort: returns an empty object when auth is unavailable or the call
+ * fails, so a missing signal never breaks the report.
+ *
+ * @param {string} projectId
+ * @param {number|string} mrIid
+ * @returns {Promise<{has_conflicts?: boolean, merge_status?: string}>}
+ */
+async function checkMergeConflicts(projectId, mrIid) {
+  const headers = authHeaders();
+  if (!headers || !projectId || !mrIid) return {};
+  try {
+    const url = `${apiBaseUrl()}/projects/${encodeURIComponent(
+      projectId
+    )}/merge_requests/${mrIid}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return {};
+    const mr = await res.json();
+    return {
+      has_conflicts: mr.has_conflicts === true,
+      merge_status: mr.detailed_merge_status || mr.merge_status,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Annotate each open MR with its merge-conflict signal. Runs the per-MR
+ * lookups in parallel and tolerates partial failures.
+ *
+ * @param {object[]} mrs
+ * @param {string} projectId
+ * @returns {Promise<object[]>}
+ */
+async function enrichOpenMRsWithConflicts(mrs, projectId) {
+  if (!Array.isArray(mrs) || mrs.length === 0) return mrs;
+  return Promise.all(
+    mrs.map(async (mr) => {
+      const conflict = await checkMergeConflicts(projectId, mr.id);
+      return { ...mr, ...conflict };
+    })
+  );
+}
 
 /**
  * Find open merge requests that touch any of the specified files.
@@ -31,7 +78,7 @@ export async function gitlabGetOpenMRs(files, projectId) {
 
   if (orbitResult) {
     console.log(`    [GitLab] ✓ Real MR data from Orbit`);
-    return orbitResult;
+    return enrichOpenMRsWithConflicts(orbitResult, projectId);
   }
 
   // Fallback to mock data
