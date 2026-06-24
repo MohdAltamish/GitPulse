@@ -1,0 +1,252 @@
+# GitPulse — Blast Radius Analyzer
+
+> *"Before you push, know what breaks."*
+
+An AI-powered pre-merge safety gate built on the **GitLab Duo Agent Platform** that uses **GitLab Orbit's knowledge graph** to answer the one question every developer should ask before merging: **"What will this change break?"**
+
+Built for the **GitLab Transcend Hackathon 2026**.
+
+- **Project:** https://gitlab.com/gitlab-ai-hackathon/transcend/35602696
+- **Proof artifact (real graph):** `orbit-report.json` from the CI `orbit-proof` job (`data_source: orbit-remote`)
+- **License:** MIT
+
+---
+
+## Inspiration
+
+Every engineer has lived this nightmare: you change one small function, ship it, and three days later a service nobody told you about falls over in production. The post-mortem always ends with the same sentence: *"We didn't know that was connected."*
+
+We were inspired by how much **invisible coupling** exists in real codebases. The dependency information *already exists* (in imports, in MR history, in CI pipelines), but it is scattered across systems no human can reconcile in the thirty seconds before hitting **Merge**. Manual dependency hunting takes 30+ minutes and *still* misses things, because `grep`:
+
+- can't see **who owns** the affected code,
+- can't see **which open MRs** are about to collide with you, and
+- can't see **which pipelines** are at risk.
+
+When we discovered the **GitLab Orbit knowledge graph**, the idea clicked. The graph already models files, imported symbols, merge requests, users, and pipelines as connected entities. The answer to *"What will this change break?"* was sitting in a queryable graph the whole time. **GitPulse** was born to ask that question for you, in seconds, before you push.
+
+---
+
+## What it does
+
+**GitPulse is an AI-powered Blast Radius Analyzer.** You point it at a file or function you are about to change:
+
+```bash
+node cli.js --file utils/tax.js --function calculateTax --project-id 83678311
+```
+
+In seconds it produces a **Blast Radius Report**:
+
+- 📁 **Direct dependents** — every file that imports your target, via Orbit's `ImportedSymbol` entity.
+- 🔗 **Transitive dependents** — files that depend on those, traced to depth ≥ 2.
+- 👥 **Ownership** — who owns each file, resolved from the `User → MergeRequest` `AUTHORED` edge, labeled honestly as `mr-authorship`, `inferred-from-path`, or `unknown`.
+- 🔀 **Open MR collisions** — in-flight MRs already touching the same files.
+- ⚙️ **Pipeline risk** — CI/CD pipelines that will be affected.
+- 📊 **Deterministic risk score** — LOW / MEDIUM / HIGH, computed by code, never by the AI.
+- ✅ **Suggested reviewers** — the actual people to notify before you merge.
+- 📋 **Safe-to-merge verdict** — a binary answer with enforced guardrails.
+
+### What makes it different
+
+The "what depends on this code" space is crowded, but each existing tool solves only one slice:
+
+| Capability | Static analyzers | CODEOWNERS / blame | AI code Q&A | **GitPulse** |
+|---|---|---|---|---|
+| Transitive dependency traversal | ✅ | ❌ | ⚠️ approximate | ✅ depth ≥ 2 |
+| Owner mapping | ❌ | ✅ | ❌ | ✅ from MR history |
+| In-flight open-MR collision | ❌ | ❌ | ❌ | ✅ |
+| Pipeline risk | ⚠️ build targets only | ❌ | ❌ | ✅ |
+| Deterministic risk score | ⚠️ static only | ❌ | ❌ | ✅ formula + guardrails |
+| `safe_to_merge` verdict | ❌ | ❌ | ❌ | ✅ |
+| Honest data provenance | ❌ | ❌ | ❌ | ✅ |
+
+> **GitPulse's USP:** the only pre-merge gate that fuses dependency graph, ownership, in-flight MRs, and pipeline risk into one *deterministic, reproducible* safety verdict on GitLab's knowledge graph.
+
+GitPulse also runs as a **CI/CD gate** — it posts the report as an MR comment (idempotently, via a hidden marker) and can fail the pipeline when risk is HIGH, before anything reaches production.
+
+---
+
+## How we built it
+
+We built GitPulse as small, single-responsibility **ESM modules** in Node.js 18+, depending on nothing but `@anthropic-ai/sdk` and `dotenv`.
+
+```
+cli.js  ──→  agent.js (optional Claude loop, model: claude-sonnet-4-6)
+                 │  runs four tools (LLM-driven OR deterministic), then report.js
+                 ├── orbit.js          → dependency traversal + ownership
+                 │     ├── orbit-client.js → Orbit REST client (POST /api/v4/orbit/query)
+                 │     │     └── gitlab-api.js → shared base-URL + auth headers
+                 │     └── static-analysis.js → real import-graph fallback (no Orbit)
+                 ├── gitlab.js         → open MRs + pipelines via Orbit
+                 ├── report.js         → deterministic scoring + report builder
+                 └── mr-comment.js     → idempotent MR-note posting (--comment)
+```
+
+- **`cli.js`** — entry point, argument parsing, and the enforcing CI exit-code gates (`--require-orbit`, `--fail-on`, `--strict`).
+- **`agent.js`** — a Claude agentic loop (`claude-sonnet-4-6`) that decides *what* to investigate, exposing four tools (`orbit_query_dependents`, `orbit_get_owners`, `gitlab_get_open_mrs`, `gitlab_get_pipelines`) plus a graph-readiness probe.
+- **`orbit.js` + `orbit-client.js`** — dependency traversal and ownership, querying Orbit over REST (`POST /api/v4/orbit/query`).
+- **`report.js`** — the deterministic scoring engine and report builder.
+- **`mr-comment.js`** — idempotent MR-note posting via a hidden HTML marker.
+
+### The pivotal decision: separate the agent from the scoring
+
+The LLM decides *what to look at*; the risk verdict lives entirely in `report.js`. The model is explicitly forbidden, in the system prompt, from inventing, recomputing, "normalizing", or capping the score:
+
+$$
+\begin{aligned}
+\text{score} = \;& 5 \cdot d_{\text{direct}} \\
+           + \;& 2 \cdot d_{\text{transitive}} \\
+           + \;& 10 \cdot t_{\text{teams}} \\
+           + \;& 15 \cdot m_{\text{open\_mr\_overlaps}} \\
+           + \;& 5 \cdot p_{\text{pipelines}}
+\end{aligned}
+$$
+
+$$
+\text{risk} =
+\begin{cases}
+\textbf{LOW}    & \text{if } \text{score} < 30 \\
+\textbf{MEDIUM} & \text{if } 30 \le \text{score} \le 60 \\
+\textbf{HIGH}   & \text{if } \text{score} > 60
+\end{cases}
+\qquad \text{score} \le 100 \;(\text{capped})
+$$
+
+$$
+t_{\text{teams}} \ge 3 \implies \text{risk} = \textbf{HIGH} \quad (\text{guardrail, overrides band})
+$$
+
+The same input always yields the same score, whether or not an API key is present. When `ANTHROPIC_API_KEY` is set, the model drives the tool calls; when absent, GitPulse runs the **same four tools deterministically** with no LLM. We validated everything against the live graph in CI: an `orbit-proof` job runs `--require-orbit` and uploads `orbit-report.json` as hard proof the real graph answered.
+
+---
+
+## Challenges we ran into
+
+The biggest challenges were all about talking to a **live knowledge graph we had never used before**:
+
+- **Schema discovery by trial and error.** Orbit rejected queries with HTTP 400 until we learned the exact column names. `ImportedSymbol` uses `identifier_name`, not `name`. `MergeRequest` queries reject an explicit column allowlist and need default columns. Filters require the `{ "op": "eq", "value": ... }` form. Each rejection was a clue, and we baked those learnings into the README and SKILL.md.
+- **Normalizing inconsistent response shapes.** Orbit returns graph-shaped (`{ result: { nodes: [...] } }`), tabular, and alias-prefixed responses (e.g. `imp_file_path` → `file_path`). We wrote a dedicated `extractRows` / `flattenNode` parser to normalize all three shapes defensively.
+- **Auth in CI.** `CI_JOB_TOKEN` can be restricted for the Orbit endpoint, so we support a masked `api`-scoped `GITLAB_TOKEN` and centralize transport in `gitlab-api.js`.
+- **Honest fallback without lying.** We refused to silently emit demo data, so we built a three-tier provenance chain (`orbit-remote` → `static-analysis` → `mock-fallback`) where every report declares its own data source and a mock report forces `safe_to_merge: false`.
+- **Bounding traversal cost.** Unbounded transitive traversal explodes, so we cap expansion to the first 5 direct dependents at depth 2.
+
+---
+
+## Accomplishments that we're proud of
+
+- **Deterministic, auditable scoring** — the verdict is reproducible and never left to a stochastic model.
+- **Honest data provenance** — GitPulse *never* passes mock data off as a real graph trace; a loud `⚠️ MOCK DATA` banner appears and `safe_to_merge` is forced to `false` whenever data isn't real.
+- **Runs anywhere** — no API key required (deterministic mode), no `glab` binary required (pure REST transport).
+- **Real guardrails enforced in code, not prompts** — minimum depth 2, no silent file drops, 3+ teams → HIGH, open-MR overlap → never safe, HIGH → never safe, mock data → never safe.
+- **End-to-end CI proof** — a green `orbit-proof` artifact confirming `data_source: orbit-remote` against our own project, plus an enforcing `risk-gate` and an idempotent `mr-report` comment job.
+
+---
+
+## What we learned
+
+- **Knowledge graphs beat grep.** Orbit gave us cross-cutting context (ownership, open MRs, pipelines) that no import-only static analyzer can reach.
+- **LLMs should orchestrate, not adjudicate.** Letting the model *choose tools* while a deterministic engine *computes the verdict* gave us both flexibility and reproducibility.
+- **Provenance is a feature.** Being explicit about whether data is real, statically derived, or mocked turned a weakness (fallbacks) into a trust signal.
+- **Fail gracefully, loudly.** Every external call needed a fallback path, but a fallback should never be mistaken for the real thing.
+
+---
+
+## What's next for GitPulse
+
+- **Native Duo Agent Platform skill** published to the AI Catalog so any team can enable it from **Explore > AI Catalog**.
+- **CODEOWNERS-based ownership** as a first-class signal alongside MR-authorship inference.
+- **Deeper transitive traversal** with smarter cost-bounding (priority by import frequency rather than first-5).
+- **Historical risk calibration** — tuning the scoring weights against real incident data to predict actual breakage probability.
+- **Richer MR integration** — inline diff annotations and per-team notifications instead of a single MR note.
+- **Language coverage beyond JS/Python** import graphs in the static-analysis fallback.
+
+---
+
+## Sample report the agent generates
+
+Verbatim text output from the CI `orbit-proof` job against this project (`data_source: orbit-remote`), produced by `formatReportForCLI` in `report.js`:
+
+```text
+📊 Blast Radius Report — report.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Data source: orbit-remote (real graph: yes)
+🔴 Risk: HIGH (score: 87/100)
+   3 dependents across 2 teams. 1 open MR touches related code.
+
+📁 Direct Dependents (files that import this)
+   ├── agent.js                                   (Team: team-unknown)
+   └── tests/report.test.js                       (Team: team-reports)
+
+🔗 Transitive Dependents (files that depend on those)
+   └── cli.js (depth: 2, via: agent.js)
+
+👥 Teams to Notify
+   ├── #team-unknown             (2 files affected)
+   └── #team-reports             (1 file affected)
+
+🔀 Open MRs Touching Related Code
+   └── !11 — "feat: Orbit proof, enforcing risk gate, ..." by @altamish6589
+
+📐 Score Breakdown
+   + 10  direct dependents (2 × 5)
+   +  2  transitive dependents (1 × 2)
+   + 20  teams affected (2 × 10)
+   + 15  open MR overlaps (1 × 15)
+   + 40  pipelines at risk (8 × 5)
+   ────
+   = 87/100 HIGH
+
+✅ Suggested Reviewers
+   └── @altamish6589 (owners of affected files)
+
+📋 Safe to merge without notifying these teams? 🚫 NO
+```
+
+The same analysis with `--format json` emits the canonical `BlastRadiusReport` object produced by `buildReport`:
+
+```json
+{
+  "target": { "file": "report.js", "symbol": null },
+  "risk": "HIGH",
+  "risk_score": 87,
+  "risk_line": "Risk: HIGH (score: 87/100)",
+  "summary": "3 dependents across 2 teams. 1 open MR touches related code.",
+  "dependents": {
+    "direct": [
+      { "file": "agent.js", "team": "team-unknown", "owner": "@altamish6589", "import_type": "named", "depth": 1 },
+      { "file": "tests/report.test.js", "team": "team-reports", "owner": "@altamish6589", "import_type": "named", "depth": 1 }
+    ],
+    "transitive": [
+      { "file": "cli.js", "depth": 2, "team": "team-unknown", "owner": "@altamish6589", "via": "agent.js" }
+    ]
+  },
+  "teams_affected": [
+    { "name": "team-unknown", "files_count": 2, "slack": "#team-unknown", "ownership_basis": "mr-authorship" },
+    { "name": "team-reports", "files_count": 1, "slack": "#team-reports", "ownership_basis": "mr-authorship" }
+  ],
+  "open_mrs": [
+    {
+      "id": 11,
+      "title": "feat: Orbit proof, enforcing risk gate, MR-comment integration, and label guard",
+      "author": "@altamish6589",
+      "url": "https://gitlab.com/gitlab-ai-hackathon/transcend/35602696/-/merge_requests/11",
+      "overlap": ["report.js", "agent.js"]
+    }
+  ],
+  "pipelines_at_risk": ["pipeline #2624150128 (refs/merge-requests/11/head)"],
+  "suggested_reviewers": ["@altamish6589"],
+  "breaking_changes": [],
+  "graph_status": { "ready": true, "transport": "rest" },
+  "safe_to_merge": false,
+  "score_breakdown": {
+    "direct_dependents": 2,
+    "transitive_dependents": 1,
+    "teams_affected": 2,
+    "open_mr_overlaps": 1,
+    "pipelines_at_risk": 8
+  },
+  "data_source": "orbit-remote",
+  "is_real_data": true
+}
+```
+
+When Orbit is unreachable, the same report renders from **real static import analysis** (`data_source: static-analysis`) prefixed with an `ℹ️` provenance note; if even that is unavailable, a loud `⚠️ MOCK DATA` banner is shown and `safe_to_merge` is forced to `false`.
