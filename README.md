@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/screenshots/banner.png" alt="GitPulse Banner" width="800"/>
-</p>
-
 <h1 align="center">GitPulse — Blast Radius Analyzer</h1>
 
 <p align="center">
@@ -15,10 +11,6 @@
   <img src="https://img.shields.io/badge/Powered%20by-GitLab%20Orbit-blueviolet?logo=gitlab" alt="Powered by Orbit"/>
   <img src="https://img.shields.io/badge/AI%20Agent-Claude%20Sonnet%204.6-blue?logo=anthropic" alt="Claude Sonnet 4.6"/>
   <img src="https://img.shields.io/badge/Hackathon-Transcend%202026-yellow" alt="Transcend Hackathon 2026"/>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/gitpulse-logo.png" alt="GitPulse Logo" width="300"/>
 </p>
 
 ---
@@ -133,16 +125,6 @@ Continuation of the live report showing **MR authorship-based ownership**, **ove
 <p align="center">
   <img src="docs/screenshots/blast-radius-ownership-mrs-pipelines.png" alt="Ownership, Open MRs, and Pipeline Risk sections" width="900"/>
 </p>
-
-### Active Branches & Development History
-
-Active feature branches showing the iterative development process — from initial implementation through scoring fixes, ownership grounding, Orbit proof integration, and breaking-change detection:
-
-<p align="center">
-  <img src="docs/screenshots/gitlab-branches.png" alt="GitLab Active Branches" width="900"/>
-</p>
-
----
 
 ## 🔬 Live Reports from the Real Orbit Knowledge Graph
 
