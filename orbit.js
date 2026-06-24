@@ -8,8 +8,26 @@
  * Orbit API docs: https://docs.gitlab.com/ee/user/ai_features/orbit/
  */
 
-import { queryOrbit } from "./orbit-client.js";
+import { queryOrbit, getGraphStatus } from "./orbit-client.js";
 import { staticAnalyzeDependents } from "./static-analysis.js";
+
+/**
+ * Check the GitLab Orbit knowledge-graph readiness before traversal.
+ * REST-based (no glab CLI); returns a structured status and never throws.
+ *
+ * @param {string|null} namespace - Optional namespace/full path for context
+ * @returns {Promise<object>} Graph status
+ */
+export async function orbitGetGraphStatus(namespace = null) {
+  console.log(
+    `    [Orbit] Checking graph status${namespace ? ` for ${namespace}` : ""}`
+  );
+  const status = await getGraphStatus(namespace ? { namespace } : {});
+  console.log(
+    `    [Orbit] ${status.ready ? `\u2713 Graph ready (${status.transport})` : `\u2717 Not ready (${status.reason})`}`
+  );
+  return status;
+}
 
 /**
  * Query Orbit for all files that depend on the target file/symbol.
