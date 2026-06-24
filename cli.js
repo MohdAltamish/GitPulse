@@ -9,9 +9,10 @@
  *   node cli.js --file utils/tax.js --format json
  *
  * Environment Variables:
- *   ANTHROPIC_API_KEY  — Required for Claude agent
- *   GITLAB_TOKEN       — Required for real GitLab API calls
+ *   ANTHROPIC_API_KEY  — Optional; enables the Claude-driven agent loop
+ *   GITLAB_TOKEN       — GitLab token (api scope) for real Orbit + MR comments
  *   GITLAB_PROJECT_ID  — Default project ID (can override with --project-id)
+ *   GITLAB_API_URL     — Optional API base URL (default https://gitlab.com/api/v4)
  */
 
 import "dotenv/config";
@@ -123,10 +124,10 @@ EXAMPLES:
   node cli.js --file utils/tax.js -p 12345
 
 ENVIRONMENT:
-  ANTHROPIC_API_KEY   Claude API key (required)
-  GITLAB_TOKEN        GitLab access token
+  ANTHROPIC_API_KEY   Claude API key (optional; enables the LLM-driven loop)
+  GITLAB_TOKEN        GitLab access token (api scope) for real Orbit + comments
   GITLAB_PROJECT_ID   Default project ID
-  ORBIT_API_URL       Orbit API base URL
+  GITLAB_API_URL      GitLab API v4 base URL (default: https://gitlab.com/api/v4)
 `);
 }
 
