@@ -916,5 +916,5 @@ MIT
 
 <p align="center">
   <strong>Built with ❤️ for the GitLab Transcend Hackathon 2026</strong><br/>
-  <em>Powered by GitLab Orbit Knowledge Graph × Claude Sonnet 4.6</em>
+  <em>Powered by GitLab Orbit Knowledge Graph × Claude Opus 4.8 </em>
 </p>
